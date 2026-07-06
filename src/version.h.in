@@ -1,0 +1,5 @@
+// version.h.in — configured by CMake into <build>/generated/diffcue/version.h
+// Task 11.2: DIFFCUE_VERSION comes from git tag (or 0.1.0-dev if untagged).
+#pragma once
+
+#define DIFFCUE_VERSION "@DIFFCUE_VERSION@"

@@ -1,0 +1,11 @@
+CompileFlags:
+  Add:
+    - -std=c++17
+    - -Ithirdparty
+    - -Ithirdparty/imgui
+    - -Ithirdparty/imgui/backends
+    - -Ithirdparty/ImGuiColorTextEdit
+  Compiler: clangd
+
+Index:
+  Background: Build

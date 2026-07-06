@@ -1,0 +1,15 @@
+[submodule "thirdparty/imgui"]
+	path = thirdparty/imgui
+	url = https://github.com/ocornut/imgui.git
+[submodule "thirdparty/Catch2"]
+	path = thirdparty/Catch2
+	url = https://github.com/catchorg/Catch2.git
+[submodule "thirdparty/nativefiledialog-extended"]
+	path = thirdparty/nativefiledialog-extended
+	url = https://github.com/btzy/nativefiledialog-extended.git
+[submodule "thirdparty/glfw"]
+	path = thirdparty/glfw
+	url = https://github.com/glfw/glfw.git
+[submodule "thirdparty/ImGuiColorTextEdit"]
+	path = thirdparty/ImGuiColorTextEdit
+	url = https://github.com/goossens/ImGuiColorTextEdit.git

@@ -67,3 +67,23 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# ---------------------------------------------------------------------------
+# diffcue-specific
+# ---------------------------------------------------------------------------
+
+# Per-folder sidecar state created at runtime (cues.json, prefs.json)
+.diffcue/
+
+# IDE caches (keep .vscode/settings.json tracked, ignore the rest)
+.vscode/*.db
+.vscode/.ropeproject/
+.vs/
+.idea/
+.codebuddy/
+.claude/
+
+# Allowlist: vendored third-party sources MUST stay tracked even though
+# generic patterns above (e.g. *.a, *.lib) would catch prebuilt artifacts.
+!thirdparty/
+
