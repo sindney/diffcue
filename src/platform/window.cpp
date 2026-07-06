@@ -61,7 +61,12 @@ Window::Window(int width, int height, const std::string& title) {
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 #ifdef __APPLE__
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
-    glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_TRUE);
+    // GLFW_SCALE_FRAMEBUFFER (3.4+) replaces the macOS-only
+    // GLFW_COCOA_RETINA_FRAMEBUFFER alias. Either makes the framebuffer
+    // match the backing display scale (typically 2x on retina), which is
+    // what we want so the OpenGL viewport / ImGui draw data are produced
+    // at native pixel density.
+    glfwWindowHint(GLFW_SCALE_FRAMEBUFFER, GLFW_TRUE);
 #endif
 
     // 1. Create the window (default size — resized later from saved ini).
@@ -110,11 +115,27 @@ Window::Window(int width, int height, const std::string& title) {
         }
     }
 
-    // 5. DPI scaling (default font + style sizes).
+    // 5. HiDPI / retina handling — set the framebuffer scale and load a
+    // crisp font at the matching rasterizer density. Style values stay
+    // in points (1pt == 1 logical pixel).
     io.DisplayFramebufferScale = ImVec2(dpi_scale_, dpi_scale_);
-    ImGui::GetStyle().FontScaleMain = dpi_scale_;
-    ImGui::GetStyle().ScaleAllSizes(dpi_scale_);
+
+    // 13pt text on screen, atlas rasterized at 13 * dpi_scale_ framebuffer
+    // pixels. AddFontDefaultVector gives a scalable atlas; the default
+    // AddFontDefault would pick the 13px-only bitmap font and look blocky
+    // on retina.
+    if (dpi_scale_ > 1.0f) {
+        ImFontConfig font_cfg;
+        font_cfg.SizePixels = 13.0f;
+        font_cfg.RasterizerDensity = dpi_scale_;
+        io.Fonts->AddFontDefaultVector(&font_cfg);
+    } else {
+        io.Fonts->AddFontDefault();
+    }
+
     ImGui::StyleColorsDark();
+    // (No ScaleAllSizes / FontScaleMain — the framebuffer scale above
+    //  is the single source of truth for DPI.)
 
     // 6. Backend init.
     if (!ImGui_ImplGlfw_InitForOpenGL(window_, true))
