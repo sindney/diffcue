@@ -2,6 +2,8 @@
 
 A lightweight, cross-platform diff reviewer for AI coding CLI review loops.
 
+![](images/addcue.png)
+
 ## Why
 
 When using AI coding CLIs (Claude Code, Cursor agents, etc.) in a "vibe" loop,
@@ -168,7 +170,4 @@ diffcue is built on the following open-source projects:
 - [Catch2](https://github.com/catchorg/Catch2) — test framework
 - [nativefiledialog-extended](https://github.com/btzy/nativefiledialog-extended) — native folder picker
 - [dtl](https://github.com/cubicdaiya/dtl) — diff template library (bundled with ImGuiColorTextEdit)
-
-The bundled ImGui themes (Dark, ForestGreen, Amethyst, Sapphire, AmberYellow,
-Dracula, CatppuccinMocha, GruvboxHard, CrimsonVesuvius, RoseQuartz, Cyberpunk,
-PaperAndInk) come from [TheAncientOwl's theme collection](https://github.com/ocornut/imgui/issues/707#issuecomment-4107169777).
+- [ImGui Theme](https://github.com/ocornut/imgui/issues/707#issuecomment-4107169777) - TheAncientOwl's theme collection
