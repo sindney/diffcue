@@ -1,9 +1,11 @@
 // model/prefs.cpp — prefs JSON sidecar (task 6.6).
 //
 // Minimal hand-rolled JSON (same style as cue_store). Schema:
-//   { "version": 1, "app_theme": "...", "editor_palette": "...", "diff_mode": "side|inline" }
+//   { "version": 1, "app_theme": "...", "editor_palette": "...",
+//     "diff_mode": "side|inline", "recent_folders": ["...", "..."] }
 #include "model/prefs.h"
 
+#include <algorithm>
 #include <fstream>
 #include <sstream>
 
@@ -72,6 +74,25 @@ bool parse_number(std::string_view s, size_t& i, int64_t& out) {
     }
 }
 
+// Parse a JSON array of strings: ["a", "b", ...]. Returns the parsed
+// strings on success (caller may post-filter). On any malformed input,
+// leaves `i` at the failure point and returns what was parsed so far.
+bool parse_string_array(std::string_view s, size_t& i, std::vector<std::string>& out) {
+    if (!match(s, i, '[')) return false;
+    skip_ws(s, i);
+    if (i < s.size() && s[i] == ']') { ++i; return true; }  // empty array
+    while (i < s.size()) {
+        std::string item;
+        if (!parse_string(s, i, item)) return false;
+        out.push_back(item);
+        skip_ws(s, i);
+        if (i < s.size() && s[i] == ',') { ++i; continue; }
+        if (i < s.size() && s[i] == ']') { ++i; return true; }
+        return false;  // neither comma nor close → malformed
+    }
+    return false;
+}
+
 }  // namespace
 
 Prefs load_prefs(const std::filesystem::path& dir) {
@@ -104,11 +125,29 @@ Prefs load_prefs(const std::filesystem::path& dir) {
             std::string v;
             if (!parse_string(s, i, v)) break;
             p.diff_mode = (v == "inline") ? DiffMode::Inline : DiffMode::SideBySide;
+        } else if (key == "recent_folders") {
+            std::vector<std::string> raw;
+            if (!parse_string_array(s, i, raw)) break;
+            // Filter out paths that no longer exist on disk (spec: "Missing
+            // folder is dropped at load"). Keep order intact.
+            p.recent_folders.clear();
+            p.recent_folders.reserve(raw.size());
+            for (const auto& str : raw) {
+                std::error_code ec;
+                if (std::filesystem::exists(str, ec)) {
+                    p.recent_folders.emplace_back(str);
+                }
+            }
         } else {
-            // Skip unknown value: try string first, then number.
+            // Skip unknown value: try string first, then number, then array.
             std::string ds;
             int64_t dn = 0;
-            if (!parse_string(s, i, ds)) parse_number(s, i, dn);
+            std::vector<std::string> da;
+            if (!parse_string(s, i, ds)) {
+                if (!parse_number(s, i, dn)) {
+                    parse_string_array(s, i, da);
+                }
+            }
         }
         skip_ws(s, i);
         if (i < s.size() && s[i] == ',') ++i;
@@ -128,7 +167,13 @@ void save_prefs(const std::filesystem::path& dir, const Prefs& prefs) {
     ss << "  \"version\": 1,\n";
     ss << "  \"app_theme\": \"" << json_escape(prefs.app_theme) << "\",\n";
     ss << "  \"editor_palette\": \"" << json_escape(prefs.editor_palette) << "\",\n";
-    ss << "  \"diff_mode\": \"" << (prefs.diff_mode == DiffMode::Inline ? "inline" : "side") << "\"\n";
+    ss << "  \"diff_mode\": \"" << (prefs.diff_mode == DiffMode::Inline ? "inline" : "side") << "\",\n";
+    ss << "  \"recent_folders\": [";
+    for (size_t k = 0; k < prefs.recent_folders.size(); ++k) {
+        if (k) ss << ", ";
+        ss << "\"" << json_escape(prefs.recent_folders[k].string()) << "\"";
+    }
+    ss << "]\n";
     ss << "}\n";
 
     const std::string tmp = path.string() + ".tmp";

@@ -61,6 +61,23 @@ MenubarActions render_menubar(model::Prefs& prefs) {
         if (ImGui::MenuItem("Open Folder...", "Ctrl+O")) {
             actions.open_folder_clicked = true;
         }
+        if (ImGui::BeginMenu("Open Recent")) {
+            if (prefs.recent_folders.empty()) {
+                ImGui::MenuItem("No recent folders", nullptr, false, false);
+            } else {
+                for (int i = 0; i < static_cast<int>(prefs.recent_folders.size()); ++i) {
+                    const auto& p = prefs.recent_folders[i];
+                    if (ImGui::MenuItem(p.generic_string().c_str())) {
+                        actions.open_recent_index = i;
+                    }
+                }
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Command Palette...", "Ctrl+P")) {
+            actions.open_palette_clicked = true;
+        }
         ImGui::Separator();
         if (ImGui::MenuItem("Quit", "Ctrl+Q")) {
             actions.quit_clicked = true;

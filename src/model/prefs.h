@@ -9,6 +9,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #include "model/diff_model.h"
 
@@ -18,6 +19,9 @@ struct Prefs {
     std::string app_theme;          // theme name from theme.txt; empty → first theme
     std::string editor_palette;     // "Dark" | "Light" | "Mariana"
     DiffMode diff_mode = DiffMode::SideBySide;
+    // Most-recently-first, deduplicated by canonical path, capped at 10.
+    // Folders that no longer exist on disk are filtered out at load time.
+    std::vector<std::filesystem::path> recent_folders;
 };
 
 // Load prefs from <dir>/prefs.json. Falls back to defaults

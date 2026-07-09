@@ -12,6 +12,7 @@
 #include "model/file_tree.h"
 #include "model/prefs.h"
 #include "platform/window.h"
+#include "ui/command_palette.h"
 #include "ui/diff_viewer_panel.h"
 #include "ui/find_bar.h"
 #include "ui/prompt_panel.h"
@@ -30,6 +31,12 @@ private:
     // Re-scan git status and rebuild the file tree (called on folder open
     // and on focus-regain, task 9.6).
     void refresh_git_status();
+
+    // Open a folder by its already-canonical path. Consolidates the shared
+    // body for all folder-open entrances (CLI init, menubar picker,
+    // drag-drop, Open Recent, command palette). Sets folder_, title, prefs,
+    // cues, git status, resets current file/diff/viewer, applies prefs.
+    void open_folder(const std::filesystem::path& canonical);
 
     // Open a file from the file browser into the diff viewer (task 9.3).
     void open_file(const std::filesystem::path& relpath);
@@ -74,6 +81,11 @@ private:
     bool git_missing_ = false;
     bool not_git_repo_ = false;
     bool about_open_ = false;
+    // Cmd+P command palette visibility (toggled by bare Cmd+P / Ctrl+P).
+    bool palette_open_ = false;
+    // Set when the user picks a recent-folder entry whose path no longer
+    // exists; rendered as a modal error popup next frame.
+    std::string folder_error_;
 
     // Hunk navigation state (task 8.8).
     std::vector<HunkRef> all_hunks_;

@@ -21,8 +21,10 @@
 #include "model/prompt_builder.h"
 #include "platform/clipboard.h"
 #include "platform/file_dialog.h"
+#include "platform/open_url.h"
 #include "ui/file_browser_panel.h"
 #include "ui/menubar.h"
+#include "ui/command_palette.h"
 #include "ui/theme_loader.h"
 #include "ui/toolbar_panel.h"
 
@@ -118,25 +120,15 @@ App::App(std::filesystem::path folder)
         glfwSetWindowFocusCallback(window_.handle(), glfw_focus_callback);
     }
 
-    // Set window title to include the folder path.
-    window_.set_title("diffcue - " + folder_.generic_string());
-
     // Probe git (task 5.5).
     if (!git::git_available()) {
         git_missing_ = true;
         return;
     }
 
-    // Load prefs + cues + file tree (task 9.3).
-    prefs_ = model::load_prefs();
-    cues_.emplace(folder_);
-    refresh_git_status();
-
-    // Check if the folder is a git repo.
-    not_git_repo_ = !git::is_repo(folder_);
-
-    // Apply theme + palette + diff mode on startup (task 7.6).
-    apply_prefs();
+    // The CLI folder is already canonical (see cli/args.cpp). Delegate the
+    // shared folder-open body to open_folder.
+    open_folder(folder_);
 }
 
 App::~App() {
@@ -163,6 +155,29 @@ void App::refresh_git_status() {
             return lines;
         });
     }
+}
+
+void App::open_folder(const std::filesystem::path& canonical) {
+    folder_ = canonical;
+    window_.set_title("diffcue - " + folder_.generic_string());
+    prefs_ = model::load_prefs();
+    cues_.emplace(folder_);
+    git::clear_blob_cache();
+    refresh_git_status();
+    current_open_path_.clear();
+    current_diff_.reset();
+    diff_viewer_.clear();
+    not_git_repo_ = !git::is_repo(folder_);
+    apply_prefs();
+
+    // Record this folder in recent_folders: dedupe by canonical path
+    // (remove if present), insert at position 0, cap at 10. Persist
+    // immediately so the list survives a crash right after opening.
+    auto& rf = prefs_.recent_folders;
+    rf.erase(std::remove(rf.begin(), rf.end(), folder_), rf.end());
+    rf.insert(rf.begin(), folder_);
+    if (rf.size() > 10) rf.resize(10);
+    model::save_prefs(prefs_);
 }
 
 model::FileDiff App::build_file_diff(const std::filesystem::path& relpath) {
@@ -411,6 +426,29 @@ int App::run() {
         window_.poll_events();
         window_.new_frame();
 
+        // --- Command palette keyboard shortcuts ---
+        // Bare Cmd+P / Ctrl+P toggles the palette; Cmd+Shift+P / Ctrl+Shift+P
+        // runs Copy Prompt. Check the shifted combo first so a Shift+P press
+        // does not fall through to the bare-P branch. The palette toggle is
+        // owned here (the palette does not handle Cmd+P itself — avoids a
+        // double-toggle).
+        {
+            ImGuiIO& io = ImGui::GetIO();
+            if (ImGui::IsKeyPressed(ImGuiKey_P, false) && io.KeyCtrl && io.KeyShift) {
+                std::string prompt = model::build_prompt(*cues_);
+                prompt_panel_.set_text(prompt);
+                prompt_open_ = true;
+            } else if (ImGui::IsKeyPressed(ImGuiKey_P, false) && io.KeyCtrl && !io.KeyShift) {
+                palette_open_ = !palette_open_;
+            }
+        }
+
+        // --- Command palette render (top of frame, before menubar/toolbar) ---
+        ui::PaletteActions paction;
+        if (palette_open_) {
+            ui::render_command_palette(paction, palette_open_, prefs_, *cues_);
+        }
+
         // --- Not-a-git-repo warning ---
         if (show_not_repo_warning) {
             ImGui::OpenPopup("Not a Git Repository");
@@ -430,17 +468,10 @@ int App::run() {
         // --- Process drag-and-drop folder (set by the GLFW drop callback) ---
         if (g_dropped_folder) {
             std::error_code ec;
-            folder_ = std::filesystem::canonical(*g_dropped_folder, ec);
-            window_.set_title("diffcue - " + folder_.generic_string());
-            prefs_ = model::load_prefs();
-            cues_.emplace(folder_);
-            git::clear_blob_cache();
-            refresh_git_status();
-            current_open_path_.clear();
-            current_diff_.reset();
-            diff_viewer_.clear();
-            not_git_repo_ = !git::is_repo(folder_);
-            apply_prefs();
+            auto canonical = std::filesystem::canonical(*g_dropped_folder, ec);
+            if (!ec) {
+                open_folder(canonical);
+            }
             g_dropped_folder.reset();
         }
 
@@ -453,8 +484,27 @@ int App::run() {
 
         // --- Menubar ---
         auto mactions = ui::render_menubar(prefs_);
+        // Merge palette menubar-type commands onto the SAME mactions flags so
+        // the existing handlers run (no duplicated effect code).
+        if (paction.run) {
+            switch (paction.command) {
+                case ui::PaletteCommand::OpenFolder:
+                    mactions.open_folder_clicked = true; break;
+                case ui::PaletteCommand::OpenRecent:
+                    mactions.open_recent_index = paction.payload; break;
+                case ui::PaletteCommand::ShowAll:
+                    mactions.show_all_toggled = true;
+                    mactions.show_all = !show_all_; break;
+                case ui::PaletteCommand::About:
+                    mactions.about_clicked = true; break;
+                case ui::PaletteCommand::Quit:
+                    mactions.quit_clicked = true; break;
+                default: break;  // toolbar-type commands merged below
+            }
+        }
         if (mactions.quit_clicked) window_.request_close();
         if (mactions.show_all_toggled) show_all_ = mactions.show_all;
+        if (mactions.open_palette_clicked) palette_open_ = true;
 
         // --- Keyboard shortcuts (the menu items show Ctrl+O / Ctrl+Q / Ctrl+F
         // as hint labels, but ImGui doesn't wire them — we handle them here) ---
@@ -470,17 +520,35 @@ int App::run() {
             auto picked = platform::file_dialog::pick_folder(folder_.generic_string());
             if (picked) {
                 std::error_code ec;
-                folder_ = std::filesystem::canonical(*picked, ec);
-                window_.set_title("diffcue - " + folder_.generic_string());
-                prefs_ = model::load_prefs();
-                cues_.emplace(folder_);
-                git::clear_blob_cache();
-                refresh_git_status();
-                current_open_path_.clear();
-                current_diff_.reset();
-                diff_viewer_.clear();
-                not_git_repo_ = !git::is_repo(folder_);
-                apply_prefs();
+                auto canonical = std::filesystem::canonical(*picked, ec);
+                if (!ec) {
+                    open_folder(canonical);
+                }
+            }
+        }
+        if (mactions.open_recent_index >= 0) {
+            // Lookup the path in prefs_.recent_folders. If it no longer
+            // exists on disk, show an error popup and remove the entry
+            // (spec: "Stale entry removed on selection"). Otherwise open
+            // it via the shared open_folder path.
+            const int idx = mactions.open_recent_index;
+            if (idx >= 0 && idx < static_cast<int>(prefs_.recent_folders.size())) {
+                const auto path = prefs_.recent_folders[idx];
+                std::error_code ec;
+                if (!std::filesystem::exists(path, ec)) {
+                    folder_error_ = "error: folder not found: " + path.generic_string();
+                    prefs_.recent_folders.erase(prefs_.recent_folders.begin() + idx);
+                    model::save_prefs(prefs_);
+                } else {
+                    auto canonical = std::filesystem::canonical(path, ec);
+                    if (!ec) {
+                        open_folder(canonical);
+                    } else {
+                        folder_error_ = "error: folder not found: " + path.generic_string();
+                        prefs_.recent_folders.erase(prefs_.recent_folders.begin() + idx);
+                        model::save_prefs(prefs_);
+                    }
+                }
             }
         }
         if (mactions.about_clicked) about_open_ = true;
@@ -498,7 +566,29 @@ int App::run() {
             ImGui::Text("Review diff -> annotate lines -> emit a structured follow-up prompt.");
             ImGui::Separator();
             ImGui::Text("Built with ImGui + ImGuiColorTextEdit + GLFW3 (all statically linked).");
+            ImGui::Text("Built with GLM 5.2 + CodeBuddy.");
+            ImGui::Separator();
+            if (ImGui::TextLink("https://github.com/sindney/diffcue")) {
+                platform::open_url("https://github.com/sindney/diffcue");
+            }
+            ImGui::Separator();
             if (ImGui::Button("OK")) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
+        // --- Recent-folder error popup (stale entry selected) ---
+        if (!folder_error_.empty()) {
+            ImGui::OpenPopup("Folder Error");
+        }
+        center_modal(ImVec2(480, 180));
+        if (ImGui::BeginPopupModal("Folder Error", nullptr, ImGuiWindowFlags_NoCollapse)) {
+            ImGui::TextWrapped("%s", folder_error_.c_str());
+            ImGui::Separator();
+            if (ImGui::Button("OK") || ImGui::IsKeyPressed(ImGuiKey_Enter, false)
+                || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                folder_error_.clear();
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
@@ -520,6 +610,34 @@ int App::run() {
             ImGui::BeginChild("toolbar", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
             auto tactions = ui::render_toolbar(*cues_, prefs_, find_bar_.open,
                                                diff_viewer_.ignore_eol());
+            // Merge palette toolbar-type commands onto the SAME tactions flags
+            // so the existing handlers run (no duplicated effect code).
+            if (paction.run) {
+                switch (paction.command) {
+                    case ui::PaletteCommand::NextChange:
+                        tactions.next_change = true; break;
+                    case ui::PaletteCommand::PrevChange:
+                        tactions.prev_change = true; break;
+                    case ui::PaletteCommand::Refresh:
+                        tactions.refresh = true; break;
+                    case ui::PaletteCommand::ClearCues:
+                        tactions.clear_cues = true; break;
+                    case ui::PaletteCommand::CopyPrompt:
+                        tactions.copy_prompt = true; break;
+                    case ui::PaletteCommand::JumpToCue:
+                        tactions.jump_to_cue_index = paction.payload; break;
+                    case ui::PaletteCommand::ToggleDiffMode:
+                        // Flip prefs.diff_mode here; the handler below applies it.
+                        prefs_.diff_mode = (prefs_.diff_mode == model::DiffMode::SideBySide)
+                                           ? model::DiffMode::Inline : model::DiffMode::SideBySide;
+                        tactions.diff_mode_toggled = true; break;
+                    case ui::PaletteCommand::ToggleIgnoreEOL:
+                        tactions.ignore_eol_toggled = true; break;
+                    case ui::PaletteCommand::ToggleFindBar:
+                        tactions.find_toggled = true; break;
+                    default: break;  // menubar-type commands handled above
+                }
+            }
             if (tactions.prev_change) scroll_to_next_change(-1);
             if (tactions.next_change) scroll_to_next_change(1);
             if (tactions.refresh) {
@@ -537,12 +655,25 @@ int App::run() {
             if (ImGui::BeginPopupModal("Clear Cues?", nullptr, ImGuiWindowFlags_NoCollapse)) {
                 ImGui::Text("Remove all %d cues?", cues_->count());
                 ImGui::Separator();
-                if (ImGui::Button("Clear")) {
+                // Focus the confirm button when the modal first opens so the
+                // default Enter behavior aligns with our explicit handler.
+                ImGui::SetKeyboardFocusHere();
+                if (ImGui::Button("Clear (Enter)")) {
                     cues_->clear();
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Cancel")) {
+                if (ImGui::Button("Cancel (Esc)")) {
+                    ImGui::CloseCurrentPopup();
+                }
+                // Explicit keyboard contract: Enter confirms, Esc cancels.
+                // These run alongside ImGui's default focused-button behavior;
+                // the explicit handlers are the source of truth.
+                if (ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+                    cues_->clear();
+                    ImGui::CloseCurrentPopup();
+                }
+                if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::EndPopup();
@@ -559,6 +690,11 @@ int App::run() {
             if (tactions.jump_to_cue_index >= 0) {
                 const auto& c = cues_->cues()[tactions.jump_to_cue_index];
                 open_file(c.file);
+                // Center the cue's line in the viewer. open_file → set_diff
+                // runs SetText first; scroll_to_line marks a request that the
+                // later Render in this frame honors (TextEditor ordering
+                // contract). `c.line` is 1-based end-to-end.
+                diff_viewer_.scroll_to_line(c.line);
             }
             ImGui::EndChild();
         }
@@ -566,13 +702,6 @@ int App::run() {
         // --- Ctrl+F (task 8.6) ---
         if (ImGui::IsKeyPressed(ImGuiKey_F, false) && ImGui::GetIO().KeyCtrl) {
             find_bar_.open = !find_bar_.open;
-        }
-
-        // --- Ctrl+P to open the Copy Prompt panel ---
-        if (ImGui::IsKeyPressed(ImGuiKey_P, false) && ImGui::GetIO().KeyCtrl) {
-            std::string prompt = model::build_prompt(*cues_);
-            prompt_panel_.set_text(prompt);
-            prompt_open_ = true;
         }
 
         // --- Ctrl+< / Ctrl+> for Prev/Next change ---

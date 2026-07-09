@@ -68,7 +68,7 @@ struct DiffViewerPanel::Impl {
     bool ignore_eol = true;
     std::string raw_old_text;
     std::string raw_new_text;
-    // Changed line sections (1-based, inclusive) for heatmap + navigation.
+    // Changed line sections (1-based, inclusive) for the heatmap overlay.
     std::vector<std::pair<int,int>> changed_sections;
     int total_lines = 0;
     // Inline cue-add input state.
@@ -244,7 +244,13 @@ DiffViewerActions DiffViewerPanel::render(const model::CueStore& cues) {
         // Capture content geometry for mouse→line mapping and overlays.
         float content_top = ImGui::GetCursorScreenPos().y;
         float content_left = ImGui::GetCursorScreenPos().x;
-        float line_h = ImGui::GetTextLineHeight();
+        // Use the TextDiff's actual line pitch (GetTextLineHeightWithSpacing *
+        // lineSpacing; lineSpacing defaults to 1.0 in TextEditor.h). The
+        // shorter GetTextLineHeight() would misalign hover/cue-dot/click
+        // against the rendered lines (TextDiff pushes ItemSpacing to 0 but
+        // computed glyphSize before the push, so it bakes in the outer
+        // ItemSpacing.y — this matches GetTextLineHeightWithSpacing() here).
+        float line_h = ImGui::GetTextLineHeightWithSpacing();
         float full_w = ImGui::GetContentRegionAvail().x;
 
         // Render the TextDiff at full width (don't steal space for the
@@ -290,8 +296,12 @@ DiffViewerActions DiffViewerPanel::render(const model::CueStore& cues) {
             }
         }
 
-        // --- Heatmap (overlay on the RIGHT edge, inside the scrollbar area) ---
-        // Shows changed sections as colored bands; viewport indicator as a border.
+        // --- Heatmap (overlay on the RIGHT edge of the content area) ---
+        // A thin static column of changed-section bands. Intentionally has
+        // NO viewport/thumb indicator — the viewport is already shown by the
+        // TextDiff's real vertical scrollbar (whose thumb is the only slider
+        // here). Drawing a thumb-like element on the heatmap previously
+        // produced a second "slider" alongside the real one.
         {
             float hm_w = 8.0f;
             float hm_x = content_left + full_w - hm_w;
@@ -311,11 +321,6 @@ DiffViewerActions DiffViewerPanel::render(const model::CueStore& cues) {
                                       ImVec2(hm_x + hm_w - 1, y1),
                                       IM_COL32(0, 180, 40, 200));  // green = added
                 }
-                // Viewport indicator (which lines are currently visible).
-                float vp_y0 = content_top + first_vis * scale;
-                float vp_y1 = content_top + (first_vis + vis_lines) * scale;
-                dl->AddRect(ImVec2(hm_x, vp_y0), ImVec2(hm_x + hm_w, vp_y1),
-                            IM_COL32(200, 200, 200, 120));
             }
         }
 
@@ -323,7 +328,9 @@ DiffViewerActions DiffViewerPanel::render(const model::CueStore& cues) {
         if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) &&
             ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
             float mouse_y = ImGui::GetMousePos().y;
-            int clicked_line = first_vis + static_cast<int>((mouse_y - content_top) / line_h);
+            // first_vis is 0-based (the index of the first visible line in
+            // lineInfo); cue lines are 1-based. Add 1 to convert.
+            int clicked_line = first_vis + 1 + static_cast<int>((mouse_y - content_top) / line_h);
             if (clicked_line < 1) clicked_line = 1;
             impl_->cue_input_line = clicked_line;
 
