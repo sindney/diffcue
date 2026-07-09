@@ -36,6 +36,9 @@ endif()
 # (unlike string-replacing CMAKE_CXX_FLAGS). Applies to all targets.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
+# Threading standard library (std::thread / std::mutex / std::condition_variable).
+find_package(Threads REQUIRED)
+
 # ---------------------------------------------------------------------------
 # Options
 # ---------------------------------------------------------------------------
@@ -100,7 +103,8 @@ target_link_libraries(diffcue_lib PUBLIC
     imgui_static
     imgui_cte_static
     glfw_static
-    nfd)
+    nfd
+    Threads::Threads)
 
 # OS OpenGL / windowing system libs (only remaining dynamic deps, per D7).
 if(WIN32)

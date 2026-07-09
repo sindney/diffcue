@@ -24,9 +24,11 @@ struct ToolbarActions {
 
 // Render the toolbar. `ignore_eol` is the current EOL-normalization state
 // (passed from the diff viewer so the toggle button reflects it).
+// `is_refreshing` drives the Refresh button's refreshing visual state.
 ToolbarActions render_toolbar(const model::CueStore& cues,
                               model::Prefs& prefs,
                               bool find_bar_open,
-                              bool ignore_eol);
+                              bool ignore_eol,
+                              bool is_refreshing);
 
 }  // namespace diffcue::ui

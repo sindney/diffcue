@@ -36,6 +36,7 @@ public:
     explicit CueStore(std::filesystem::path folder);
 
     const std::vector<Cue>& cues() const { return cues_; }
+    std::vector<Cue>& cues() { return cues_; }
     int count() const { return static_cast<int>(cues_.size()); }
     int active_count() const;  // excludes stale cues
 

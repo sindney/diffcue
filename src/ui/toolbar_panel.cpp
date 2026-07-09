@@ -24,7 +24,8 @@ int cue_popup_grace = 1;
 ToolbarActions render_toolbar(const model::CueStore& cues,
                               model::Prefs& prefs,
                               bool find_bar_open,
-                              bool ignore_eol) {
+                              bool ignore_eol,
+                              bool is_refreshing) {
     ToolbarActions actions;
 
     // Prev / Next change.
@@ -38,7 +39,13 @@ ToolbarActions render_toolbar(const model::CueStore& cues,
         ImGui::SetTooltip("Jump to next changed section.\nShortcut: Ctrl+>");
     }
     ImGui::SameLine();
-    if (ImGui::Button("Refresh")) actions.refresh = true;
+    // Refresh: while a refresh is in flight on the background worker, show
+    // "Refreshing..." and disable the button so it can't be re-clicked
+    // mid-refresh.
+    const char* refresh_label = is_refreshing ? "Refreshing...##r" : "Refresh##r";
+    if (is_refreshing) ImGui::BeginDisabled();
+    if (ImGui::Button(refresh_label)) actions.refresh = true;
+    if (is_refreshing) ImGui::EndDisabled();
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Re-scan git status and refresh the file tree.\n"
                           "Also happens automatically when you Alt-Tab back to diffcue.");

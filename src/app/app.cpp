@@ -126,35 +126,190 @@ App::App(std::filesystem::path folder)
         return;
     }
 
+    // Start the background refresh worker BEFORE open_folder() so the
+    // first refresh request (issued at the end of open_folder) is served
+    // async. The worker waits on worker_cv_ until request_pending_ is set,
+    // so it won't read folder_/cues_ until open_folder has set them. If
+    // the thread fails to spawn (rare: OS out of resources), fall back to
+    // synchronous refresh — correctness is preserved, only the async UX
+    // is lost.
+    try {
+        worker_ = std::thread([this] { worker_loop(); });
+    } catch (const std::system_error& e) {
+        std::cerr << "diffcue: could not start refresh worker ("
+                  << e.what() << "); falling back to sync refresh\n";
+        worker_failed_ = true;
+    }
+
     // The CLI folder is already canonical (see cli/args.cpp). Delegate the
     // shared folder-open body to open_folder.
     open_folder(folder_);
 }
 
 App::~App() {
+    // Signal the worker to shut down and join it so an in-flight git status
+    // subprocess never outlives App's members.
+    shutdown_.store(true, std::memory_order_release);
+    worker_cv_.notify_all();
+    if (worker_.joinable()) {
+        worker_.join();
+    }
     platform::file_dialog::quit();
 }
 
-void App::refresh_git_status() {
-    entries_ = git::list_changes(folder_);
-    file_tree_ = model::build_file_tree(entries_);
-    git::clear_blob_cache();
-    collect_all_hunks();
+// Run on the worker thread. Produces the entire result of one refresh:
+// entries, file tree, hunks, and per-cue stale flags. Does NOT touch the
+// live App members consumed by the UI thread (entries_/file_tree_/cues_) —
+// the UI thread applies the result in apply_refresh_result().
+App::RefreshResult App::compute_refresh() {
+    RefreshResult r;
+    r.folder = folder_;
+    r.entries = git::list_changes(folder_);
+    r.file_tree = model::build_file_tree(r.entries);
 
-    // Refresh stale cues (task 9.6).
-    if (cues_) {
-        cues_->refresh_stale([this](const std::filesystem::path& file, model::Side) -> int {
-            // Return line count of the new-side file, or 0 if unknown.
-            auto it = std::find_if(entries_.begin(), entries_.end(),
-                [&](const git::GitEntry& e) { return e.relpath == file; });
-            if (it == entries_.end()) return 0;
-            std::string text = git::read_blob_new(folder_, file);
-            int lines = 0;
-            for (char c : text) if (c == '\n') ++lines;
-            if (!text.empty() && text.back() != '\n') ++lines;
-            return lines;
-        });
+    // Build hunk list locally from the new file tree (matches the order
+    // collect_all_hunks would produce on the UI thread).
+    if (r.file_tree) {
+        collect_hunks_recursive(*r.file_tree, r.hunks);
     }
+
+    // Snapshot the current cue list (file + side + line only) so the worker
+    // doesn't read cues_ while the UI thread might mutate it. The snapshot
+    // is small (file, side, line — no text/created pointers).
+    struct CueSnap { std::filesystem::path file; model::Side side; int line; };
+    std::vector<CueSnap> snap;
+    if (cues_) {
+        snap.reserve(cues_->cues().size());
+        for (const auto& c : cues_->cues()) {
+            snap.push_back({c.file, c.side, c.line});
+        }
+    }
+
+    // Evaluate staleness against the snapshot. Look up each cued file in the
+    // new entries to decide whether to read its line count.
+    for (const auto& c : snap) {
+        auto it = std::find_if(r.entries.begin(), r.entries.end(),
+            [&](const git::GitEntry& e) { return e.relpath == c.file; });
+        bool stale = true;
+        if (it != r.entries.end()) {
+            std::string text = git::read_blob_new(folder_, c.file);
+            int lines = 0;
+            for (char ch : text) if (ch == '\n') ++lines;
+            if (!text.empty() && text.back() != '\n') ++lines;
+            stale = (lines == 0 || c.line < 1 || c.line > lines);
+        }
+        r.cue_stale[c.file.generic_string()] = {c.side, stale};
+    }
+
+    return r;
+}
+
+void App::worker_loop() {
+    while (true) {
+        // Wait for a request (or shutdown).
+        {
+            std::unique_lock<std::mutex> lk(worker_mutex_);
+            worker_cv_.wait(lk, [this] {
+                return shutdown_.load(std::memory_order_relaxed) ||
+                       request_pending_.load(std::memory_order_relaxed);
+            });
+        }
+        if (shutdown_.load(std::memory_order_relaxed)) return;
+
+        // Single-slot backpressure: don't produce a new result until the
+        // prior one has been consumed by the UI thread.
+        {
+            std::unique_lock<std::mutex> lk(result_mutex_);
+            result_cv_.wait(lk, [this] {
+                return !result_ready_.load(std::memory_order_relaxed) ||
+                       shutdown_.load(std::memory_order_relaxed);
+            });
+        }
+        if (shutdown_.load(std::memory_order_relaxed)) return;
+
+        // Clear the request now — we're about to serve it. Any request that
+        // arrived during the waits above is reflected in this run (folder_
+        // is read inside compute_refresh). A request arriving DURING
+        // compute_refresh sets request_pending_ again and triggers one
+        // follow-up loop — that's the coalescing.
+        request_pending_.store(false, std::memory_order_relaxed);
+
+        refresh_in_flight_.store(true, std::memory_order_relaxed);
+        RefreshResult r = compute_refresh();
+        refresh_in_flight_.store(false, std::memory_order_relaxed);
+        refresh_count_.fetch_add(1, std::memory_order_relaxed);
+
+        if (shutdown_.load(std::memory_order_relaxed)) return;
+
+        {
+            std::lock_guard<std::mutex> lk(result_mutex_);
+            result_ = std::move(r);
+            result_ready_.store(true, std::memory_order_release);
+        }
+        result_cv_.notify_one();
+    }
+}
+
+void App::request_refresh() {
+    if (worker_failed_ || !worker_.joinable()) {
+        // Worker isn't running — run sync on the UI thread (fallback).
+        RefreshResult r = compute_refresh();
+        apply_refresh_result(std::move(r));
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lk(worker_mutex_);
+        request_pending_.store(true, std::memory_order_relaxed);
+    }
+    worker_cv_.notify_one();
+}
+
+bool App::try_take_result(RefreshResult& out) {
+    if (!result_ready_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lk(result_mutex_);
+        if (result_.has_value()) {
+            out = std::move(*result_);
+            result_.reset();
+        }
+        result_ready_.store(false, std::memory_order_release);
+    }
+    result_cv_.notify_one();
+    return true;
+}
+
+void App::apply_refresh_result(RefreshResult&& r) {
+    // Stale-folder guard: if the user switched folders while this refresh
+    // was in flight, discard the result so it can't overwrite the new
+    // folder's state.
+    if (r.folder != folder_) {
+        return;
+    }
+    git::clear_blob_cache();
+    entries_ = std::move(r.entries);
+    file_tree_ = std::move(r.file_tree);
+    all_hunks_ = std::move(r.hunks);
+    // Apply per-cue stale flags by (file, side) lookup so cue add/remove
+    // that happened on the UI thread during the refresh is safe — an
+    // unmapped cue simply keeps its current stale flag.
+    if (cues_) {
+        for (auto& c : cues_->cues()) {
+            auto it = r.cue_stale.find(c.file.generic_string());
+            if (it != r.cue_stale.end() && it->second.first == c.side) {
+                c.stale = it->second.second;
+            }
+        }
+    }
+}
+
+void App::refresh_git_status() {
+    // Async: enqueue a refresh request to the background worker. The worker
+    // produces a RefreshResult off-thread; the UI thread pumps and applies it
+    // once per frame in App::run(). Coalescing means overlapping requests
+    // collapse to one running + one pending refresh.
+    request_refresh();
 }
 
 void App::open_folder(const std::filesystem::path& canonical) {
@@ -163,6 +318,14 @@ void App::open_folder(const std::filesystem::path& canonical) {
     prefs_ = model::load_prefs();
     cues_.emplace(folder_);
     git::clear_blob_cache();
+    // Drop any unconsumed result from a prior folder so a late result from
+    // the previous folder can't overwrite this new folder's state.
+    {
+        std::lock_guard<std::mutex> lk(result_mutex_);
+        result_.reset();
+        result_ready_.store(false, std::memory_order_release);
+    }
+    result_cv_.notify_one();
     refresh_git_status();
     current_open_path_.clear();
     current_diff_.reset();
@@ -475,6 +638,17 @@ int App::run() {
             g_dropped_folder.reset();
         }
 
+        // --- Pump: apply any completed async refresh result before evaluating
+        // new triggers this frame. This keeps the visible state consistent
+        // within a single frame (file tree, hunks, cue stale flags all swap
+        // together). ---
+        {
+            RefreshResult r;
+            if (try_take_result(r)) {
+                apply_refresh_result(std::move(r));
+            }
+        }
+
         // --- Re-scan on window focus regain (files may have changed) ---
         if (g_window_focused.exchange(false, std::memory_order_relaxed)) {
             if (!not_git_repo_) {
@@ -609,7 +783,8 @@ int App::run() {
         {
             ImGui::BeginChild("toolbar", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
             auto tactions = ui::render_toolbar(*cues_, prefs_, find_bar_.open,
-                                               diff_viewer_.ignore_eol());
+                                               diff_viewer_.ignore_eol(),
+                                               is_refreshing());
             // Merge palette toolbar-type commands onto the SAME tactions flags
             // so the existing handlers run (no duplicated effect code).
             if (paction.run) {
@@ -741,10 +916,16 @@ int App::run() {
 
         // --- Files (dockable file browser) ---
         if (ImGui::Begin("Files", nullptr, ImGuiWindowFlags_NoCollapse)) {
-            auto factions = ui::render_file_browser(*file_tree_, show_all_, cued_files,
-                                                      current_open_path_.generic_string());
-            if (factions.open_file) {
-                open_file(*factions.open_file);
+            if (file_tree_) {
+                auto factions = ui::render_file_browser(*file_tree_, show_all_, cued_files,
+                                                          current_open_path_.generic_string());
+                if (factions.open_file) {
+                    open_file(*factions.open_file);
+                }
+            } else {
+                // First refresh hasn't landed yet — show a loading placeholder
+                // instead of dereferencing a null tree.
+                ImGui::TextDisabled("Loading…");
             }
         }
         ImGui::End();
