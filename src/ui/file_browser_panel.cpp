@@ -78,10 +78,11 @@ std::set<std::string> expand_to_target(const model::FileTreeNode& root,
 void render_node(const model::FileTreeNode& node, FileBrowserActions& actions,
                  bool show_all, int depth, const std::set<std::string>& cued_files,
                  const std::string& current_file,
-                 const std::set<std::string>& dirs_to_expand) {
+                 const std::set<std::string>& dirs_to_expand,
+                 bool scroll_to_selected) {
     if (node.name.empty() && depth == 0) {
         for (const auto& c : node.children)
-            render_node(*c, actions, show_all, depth, cued_files, current_file, dirs_to_expand);
+            render_node(*c, actions, show_all, depth, cued_files, current_file, dirs_to_expand, scroll_to_selected);
         return;
     }
 
@@ -89,8 +90,6 @@ void render_node(const model::FileTreeNode& node, FileBrowserActions& actions,
     if (!show_all && !node.is_dir && node.status == diffcue::git::FileStatus::Clean) return;
 
     ImGui::PushID(node.relpath.generic_string().c_str());
-    ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(0);
     ImGui::Indent(static_cast<float>(depth * 16));
 
     // Yellow dot for files/folders that have cues.
@@ -122,6 +121,12 @@ void render_node(const model::FileTreeNode& node, FileBrowserActions& actions,
         if (ImGui::Selectable(label.c_str(), is_current, ImGuiSelectableFlags_SpanAllColumns)) {
             actions.open_file = node.relpath;
         }
+        // When the selection changed this frame (e.g. via Prev/Next change),
+        // scroll the file tree so the selected row is centered. Only fires
+        // on the frame the file changes, so manual scrolling isn't fought.
+        if (is_current && scroll_to_selected) {
+            ImGui::SetScrollHereY(0.5f);
+        }
         ImGui::PopStyleColor();
         if (is_current) {
             ImGui::PopStyleColor(2);
@@ -148,7 +153,7 @@ void render_node(const model::FileTreeNode& node, FileBrowserActions& actions,
         }
         if (open) {
             for (const auto& c : node.children)
-                render_node(*c, actions, show_all, depth + 1, cued_files, current_file, dirs_to_expand);
+                render_node(*c, actions, show_all, depth + 1, cued_files, current_file, dirs_to_expand, scroll_to_selected);
             ImGui::TreePop();
         }
     }
@@ -180,16 +185,18 @@ FileBrowserActions render_file_browser(const model::FileTreeNode& root, bool sho
         dirs_to_expand = expand_to_target(root, current_file);
     }
 
-    ImGui::BeginChild("file_browser", ImVec2(0, 0), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("file_browser", ImVec2(0, 0), ImGuiChildFlags_Borders,
+                      ImGuiWindowFlags_HorizontalScrollbar);
 
     if (root.children.empty()) {
         ImGui::TextDisabled("No changes in this folder.");
         ImGui::TextDisabled("Open a git working tree to review.");
     } else {
-        if (ImGui::BeginTable("file_tree", 1, ImGuiTableFlags_RowBg)) {
-            render_node(root, actions, show_all, 0, cued_files, current_file, dirs_to_expand);
-            ImGui::EndTable();
-        }
+        // Rendered directly in the child window (not a table) so that deeply
+        // indented / long-named nodes extend the content width and the child
+        // window's HorizontalScrollbar can engage. A 1-column stretch table
+        // would clamp content to the window width and suppress the scrollbar.
+        render_node(root, actions, show_all, 0, cued_files, current_file, dirs_to_expand, file_changed);
     }
 
     ImGui::EndChild();

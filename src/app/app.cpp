@@ -14,6 +14,7 @@
 #include "dtl.h"
 
 #include "imgui.h"
+#include "imgui_internal.h"  // DockBuilder API (default dock layout seeding)
 #include "diffcue/version.h"
 #include "git/git_adapter.h"
 #include "model/file_meta.h"
@@ -48,6 +49,41 @@ void center_modal(ImVec2 size) {
     ImVec2 center(vp->WorkPos.x + vp->WorkSize.x * 0.5f,
                  vp->WorkPos.y + vp->WorkSize.y * 0.5f);
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+}
+
+// Seed the main dockspace with a default layout that reproduces the
+// pre-docking fixed arrangement: Files on the left (~20% / ~300px), Diff
+// filling the center. Prompt is intentionally NOT docked here — it opens as
+// a centered floating window (see prompt_panel.cpp's SetNextWindowPos) and
+// the user can dock it manually by dragging. Only fires on first run when
+// the dockspace is empty (no ini / fresh install). After this one-shot,
+// ImGui persists the user's layout in diffcue.ini and the static flag keeps
+// the check from running every frame.
+//
+// Uses the DockBuilder API from imgui_internal.h. Must be called BEFORE the
+// corresponding Begin("Files"/"Diff"/"Prompt") calls in the same frame —
+// DockBuilderDockWindow patches pending window docks by name.
+void seed_default_dock_layout(ImGuiID dockspace_id) {
+    static bool seeded = false;
+    if (seeded) return;
+    ImGuiDockNode* node = ImGui::DockBuilderGetNode(dockspace_id);
+    if (node != nullptr && !node->IsEmpty()) {
+        // A saved layout (from ini) is already present — don't clobber it.
+        seeded = true;
+        return;
+    }
+    ImGui::DockBuilderRemoveNode(dockspace_id);
+    ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
+    ImGui::DockBuilderSetNodeSize(dockspace_id, ImGui::GetContentRegionAvail());
+    // Split left (~20% ≈ 300px on a 1500px-wide window) for Files; Diff
+    // fills the remainder.
+    ImGuiID id_left = 0, id_main = 0;
+    ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Left, 0.20f, &id_left, &id_main);
+    ImGui::DockBuilderDockWindow("Files", id_left);
+    ImGui::DockBuilderDockWindow("Diff", id_main);
+
+    ImGui::DockBuilderFinish(dockspace_id);
+    seeded = true;
 }
 
 // GLFW drop callback — stores the first dropped path for the App to process
@@ -92,7 +128,7 @@ App::App(std::filesystem::path folder)
     }
 
     // Load prefs + cues + file tree (task 9.3).
-    prefs_ = model::load_prefs(folder_);
+    prefs_ = model::load_prefs();
     cues_.emplace(folder_);
     refresh_git_status();
 
@@ -396,7 +432,7 @@ int App::run() {
             std::error_code ec;
             folder_ = std::filesystem::canonical(*g_dropped_folder, ec);
             window_.set_title("diffcue - " + folder_.generic_string());
-            prefs_ = model::load_prefs(folder_);
+            prefs_ = model::load_prefs();
             cues_.emplace(folder_);
             git::clear_blob_cache();
             refresh_git_status();
@@ -436,7 +472,7 @@ int App::run() {
                 std::error_code ec;
                 folder_ = std::filesystem::canonical(*picked, ec);
                 window_.set_title("diffcue - " + folder_.generic_string());
-                prefs_ = model::load_prefs(folder_);
+                prefs_ = model::load_prefs();
                 cues_.emplace(folder_);
                 git::clear_blob_cache();
                 refresh_git_status();
@@ -515,7 +551,7 @@ int App::run() {
             if (tactions.diff_mode_toggled) {
                 diff_viewer_.set_diff_mode(prefs_.diff_mode);
                 if (current_diff_) diff_viewer_.set_diff(*current_diff_, prefs_.diff_mode);
-                model::save_prefs(folder_, prefs_);
+                model::save_prefs(prefs_);
             }
             if (tactions.ignore_eol_toggled) {
                 diff_viewer_.set_ignore_eol(!diff_viewer_.ignore_eol());
@@ -560,24 +596,38 @@ int App::run() {
             ImGui::EndChild();
         }
 
-        // --- Main row: file browser (left, 300px) + diff viewer (center) ---
-        {
-            float bottom_h = prompt_open_ ? 220.0f : 0.0f;
-            ImGui::BeginChild("left", ImVec2(300, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
-            // Build set of cued file paths for the yellow-dot badge.
-            std::set<std::string> cued_files;
-            for (const auto& c : cues_->cues()) {
-                cued_files.insert(c.file.generic_string());
-            }
+        // --- Dockspace: hosts the dockable Files / Diff / Prompt windows.
+        // Fills the remaining area below the toolbar + find bar. On first run
+        // (no saved layout) seed_default_dock_layout reproduces the previous
+        // fixed arrangement (Files left, Diff center, Prompt bottom). ---
+        ImGuiID dockspace_id = ImGui::GetID("MainDockSpace");
+        ImGui::DockSpace(dockspace_id, ImVec2(0, 0));
+        seed_default_dock_layout(dockspace_id);  // no-op once a layout is saved
+
+        // Build set of cued file paths for the yellow-dot badge (shared by Files).
+        std::set<std::string> cued_files;
+        for (const auto& c : cues_->cues()) {
+            cued_files.insert(c.file.generic_string());
+        }
+
+        // --- Files (dockable file browser) ---
+        if (ImGui::Begin("Files", nullptr, ImGuiWindowFlags_NoCollapse)) {
             auto factions = ui::render_file_browser(*file_tree_, show_all_, cued_files,
                                                       current_open_path_.generic_string());
             if (factions.open_file) {
                 open_file(*factions.open_file);
             }
-            ImGui::EndChild();
+        }
+        ImGui::End();
 
-            ImGui::SameLine();
-            ImGui::BeginChild("center", ImVec2(0, 0));
+        // --- Diff (dockable diff viewer). The title shows the current file's
+        // relative path so the tab identifies what's being reviewed; the
+        // "###Diff" suffix keeps the window ID (and dock position) stable
+        // across file changes. Falls back to "Diff" when no file is open. ---
+        std::string diff_title = current_open_path_.empty()
+            ? std::string("Diff###Diff")
+            : (current_open_path_.generic_string() + "###Diff");
+        if (ImGui::Begin(diff_title.c_str(), nullptr, ImGuiWindowFlags_NoCollapse)) {
             auto dactions = diff_viewer_.render(*cues_);
             if (dactions.add_cue_requested && !dactions.add_cue_text.empty()) {
                 if (dactions.edit_cue_index >= 0) {
@@ -594,12 +644,12 @@ int App::run() {
             if (dactions.delete_cue_index >= 0) {
                 cues_->remove(dactions.delete_cue_index);
             }
-            ImGui::EndChild();
         }
+        ImGui::End();
 
-        // --- Prompt panel (bottom-docked, shown when "Copy Prompt" is clicked) ---
+        // --- Prompt (dockable; shown when "Copy Prompt" is clicked) ---
         if (prompt_open_) {
-            bool copy_pressed = prompt_panel_.render("Prompt##prompt", &prompt_open_, prompt_toast_ms_);
+            bool copy_pressed = prompt_panel_.render("Prompt", &prompt_open_, prompt_toast_ms_);
             if (copy_pressed) {
                 platform::clipboard::copy_to_clipboard(prompt_panel_.get_text());
                 prompt_toast_ms_ = 1500.0f;  // 1.5s toast
@@ -614,18 +664,18 @@ int App::run() {
         if (prefs_.app_theme != last_applied_theme_) {
             ui::apply_theme(prefs_.app_theme);
             last_applied_theme_ = prefs_.app_theme;
-            model::save_prefs(folder_, prefs_);
+            model::save_prefs(prefs_);
         }
         if (prefs_.editor_palette != last_applied_palette_) {
             diff_viewer_.set_palette_by_name(prefs_.editor_palette);
             last_applied_palette_ = prefs_.editor_palette;
-            model::save_prefs(folder_, prefs_);
+            model::save_prefs(prefs_);
         }
         if (prefs_.diff_mode != last_applied_mode_) {
             diff_viewer_.set_diff_mode(prefs_.diff_mode);
             last_applied_mode_ = prefs_.diff_mode;
             if (current_diff_) diff_viewer_.set_diff(*current_diff_, prefs_.diff_mode);
-            model::save_prefs(folder_, prefs_);
+            model::save_prefs(prefs_);
         }
 
         ImGui::End();  // ##main

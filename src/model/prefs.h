@@ -1,10 +1,12 @@
 // model/prefs.h — persisted user preferences (task 6.6).
 //
-// Stored at `<folder>/.diffcue/prefs.json`. Defaults to the first theme in
-// theme.txt + "Dark" editor palette + side-by-side diff mode.
+// Stored globally at <config_dir>/prefs.json (e.g. %APPDATA%\diffcue\prefs.json)
+// — these are editor/UI settings that apply to the user, not to a specific
+// project. Per-project state (cues) lives at <folder>/.diffcue/cues.json.
+// Defaults to the first theme in theme.txt + "Dark" editor palette +
+// side-by-side diff mode.
 #pragma once
 
-#include <filesystem>
 #include <string>
 
 #include "model/diff_model.h"
@@ -17,12 +19,12 @@ struct Prefs {
     DiffMode diff_mode = DiffMode::SideBySide;
 };
 
-// Load prefs from `<folder>/.diffcue/prefs.json`. Falls back to defaults
+// Load prefs from <config_dir>/prefs.json. Falls back to defaults
 // (first theme handled by caller, "Dark" palette, side-by-side) when the
 // file is missing or malformed.
-Prefs load_prefs(const std::filesystem::path& folder);
+Prefs load_prefs();
 
-// Save prefs to `<folder>/.diffcue/prefs.json` atomically.
-void save_prefs(const std::filesystem::path& folder, const Prefs& prefs);
+// Save prefs to <config_dir>/prefs.json atomically.
+void save_prefs(const Prefs& prefs);
 
 }  // namespace diffcue::model

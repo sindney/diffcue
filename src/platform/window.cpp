@@ -4,6 +4,7 @@
 // layout and the GLFW window size/position. We disable ImGui's automatic
 // disk I/O and handle it ourselves via Load/SaveIniSettingsFromMemory.
 #include "platform/window.h"
+#include "platform/paths.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -35,20 +36,6 @@ namespace {
 void glfw_error_callback(int code, const char* desc) {
     std::fprintf(stderr, "GLFW error %d: %s\n", code, desc ? desc : "(null)");
 }
-
-// User config dir: %APPDATA%\diffcue (Win), ~/Library/Application Support/diffcue (Mac), ~/.config/diffcue (Linux)
-std::string get_ini_dir() {
-#if defined(_WIN32)
-    if (const char* a = std::getenv("APPDATA")) return std::string(a) + "\\diffcue";
-#elif defined(__APPLE__)
-    if (const char* h = std::getenv("HOME")) return std::string(h) + "/Library/Application Support/diffcue";
-#else
-    if (const char* h = std::getenv("HOME")) return std::string(h) + "/.config/diffcue";
-#endif
-    return ".";
-}
-
-std::string get_ini_path() { return get_ini_dir() + "/diffcue.ini"; }
 
 }  // namespace
 
@@ -86,12 +73,13 @@ Window::Window(int width, int height, const std::string& title) {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;  // Dockable panels (enable-imgui-docking)
     io.IniFilename = nullptr;
 
     // 4. Load ini: pass full file to ImGui (ignores [Diffcue] section),
     //    then parse [Diffcue] for window geometry and resize/reposition.
     {
-        std::ifstream f(get_ini_path());
+        std::ifstream f(config_dir() / "diffcue.ini");
         if (f) {
             std::stringstream ss; ss << f.rdbuf();
             std::string content = ss.str();
@@ -115,15 +103,16 @@ Window::Window(int width, int height, const std::string& title) {
         }
     }
 
-    // 5. HiDPI / retina handling — set the framebuffer scale and load a
-    // crisp font at the matching rasterizer density. Style values stay
-    // in points (1pt == 1 logical pixel).
+    // 5. HiDPI / retina handling.
+    //    macOS retina: the OS maps logical points -> physical pixels, so
+    //    DisplayFramebufferScale alone yields correctly-sized, crisp widgets.
+    //    Scaling style/font too would double-scale (2x logical * 2x FB), which
+    //    was the b96f5ee bug on retina.
+    //    Windows/Linux: GLFW screen coords don't get the same OS-level logical
+    //    mapping, so we scale font + style sizes by dpi_scale_ to keep widgets
+    //    readable on high-DPI displays (pre-b96f5ee behavior).
+#ifdef __APPLE__
     io.DisplayFramebufferScale = ImVec2(dpi_scale_, dpi_scale_);
-
-    // 13pt text on screen, atlas rasterized at 13 * dpi_scale_ framebuffer
-    // pixels. AddFontDefaultVector gives a scalable atlas; the default
-    // AddFontDefault would pick the 13px-only bitmap font and look blocky
-    // on retina.
     if (dpi_scale_ > 1.0f) {
         ImFontConfig font_cfg;
         font_cfg.SizePixels = 13.0f;
@@ -132,10 +121,12 @@ Window::Window(int width, int height, const std::string& title) {
     } else {
         io.Fonts->AddFontDefault();
     }
-
+#else
+    io.DisplayFramebufferScale = ImVec2(dpi_scale_, dpi_scale_);
+    ImGui::GetStyle().FontScaleMain = dpi_scale_;
+    ImGui::GetStyle().ScaleAllSizes(dpi_scale_);
+#endif
     ImGui::StyleColorsDark();
-    // (No ScaleAllSizes / FontScaleMain — the framebuffer scale above
-    //  is the single source of truth for DPI.)
 
     // 6. Backend init.
     if (!ImGui_ImplGlfw_InitForOpenGL(window_, true))
@@ -155,8 +146,8 @@ Window::~Window() {
     glfwGetWindowSize(window_, &ww, &wh);
 
     std::error_code ec;
-    std::filesystem::create_directories(get_ini_dir(), ec);
-    std::ofstream f(get_ini_path(), std::ios::binary | std::ios::trunc);
+    std::filesystem::create_directories(config_dir(), ec);
+    std::ofstream f(config_dir() / "diffcue.ini", std::ios::binary | std::ios::trunc);
     if (f) {
         f.write(ini_data, len);
         f << "\n[Diffcue]\nX=" << wx << "\nY=" << wy

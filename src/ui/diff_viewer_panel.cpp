@@ -207,8 +207,9 @@ DiffViewerActions DiffViewerPanel::render(const model::CueStore& cues) {
 
     ImGui::BeginChild("diff_viewer", ImVec2(0, 0), ImGuiChildFlags_Borders);
 
-    // Header: left side = old file's EOL+Enc, right side = new file's EOL+Enc.
-    // No file path (the tree view already shows which file is selected).
+    // Header: side-by-side shows old (left) + new (right) EOL+Enc; inline mode
+    // has a single pane so only the new file's metadata is shown. No file path
+    // (the tree view already shows which file is selected).
     if (!impl_->current_path.empty()) {
         std::string left_str = std::string("EOL: ") +
             model::eol_label(impl_->old_meta.eol) + "  Enc: " +
@@ -216,11 +217,16 @@ DiffViewerActions DiffViewerPanel::render(const model::CueStore& cues) {
         std::string right_str = std::string("EOL: ") +
             model::eol_label(impl_->new_meta.eol) + "  Enc: " +
             model::encoding_label(impl_->new_meta.encoding);
-        float avail = ImGui::GetContentRegionAvail().x;
-        float right_w = ImGui::CalcTextSize(right_str.c_str()).x;
-        ImGui::TextDisabled("%s", left_str.c_str());
-        ImGui::SameLine(avail - right_w);
-        ImGui::TextDisabled("%s", right_str.c_str());
+        if (impl_->diff.GetSideBySideMode()) {
+            float avail = ImGui::GetContentRegionAvail().x;
+            float right_w = ImGui::CalcTextSize(right_str.c_str()).x;
+            ImGui::TextDisabled("%s", left_str.c_str());
+            ImGui::SameLine(avail - right_w);
+            ImGui::TextDisabled("%s", right_str.c_str());
+        } else {
+            // Inline mode: single pane — show only the new file's metadata.
+            ImGui::TextDisabled("%s", right_str.c_str());
+        }
     }
 
     if (impl_->binary) {
