@@ -74,12 +74,12 @@ bool parse_number(std::string_view s, size_t& i, int64_t& out) {
 
 }  // namespace
 
-Prefs load_prefs() {
+Prefs load_prefs(const std::filesystem::path& dir) {
     Prefs p;
     p.editor_palette = "Dark";
     p.diff_mode = DiffMode::SideBySide;
 
-    const auto path = platform::config_dir() / "prefs.json";
+    const auto path = dir / "prefs.json";
     std::ifstream f(path);
     if (!f) return p;
     std::ostringstream ss;
@@ -118,9 +118,9 @@ Prefs load_prefs() {
     return p;
 }
 
-void save_prefs(const Prefs& prefs) {
+void save_prefs(const std::filesystem::path& dir, const Prefs& prefs) {
     std::error_code ec;
-    const auto path = platform::config_dir() / "prefs.json";
+    const auto path = dir / "prefs.json";
     std::filesystem::create_directories(path.parent_path(), ec);
 
     std::ostringstream ss;
@@ -143,6 +143,14 @@ void save_prefs(const Prefs& prefs) {
         if (f) f << ss.str();
         std::filesystem::remove(tmp, ec);
     }
+}
+
+Prefs load_prefs() {
+    return load_prefs(platform::config_dir());
+}
+
+void save_prefs(const Prefs& prefs) {
+    save_prefs(platform::config_dir(), prefs);
 }
 
 }  // namespace diffcue::model

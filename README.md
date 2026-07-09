@@ -90,6 +90,18 @@ git commit -m "update <lib> to <version>"
 Other contributors get the update automatically via `git submodule update`
 after pulling.
 
+> **`imgui` must stay on a `docking`-branch commit.** `src/app/app.cpp` uses
+> `ImGui::DockBuilder*` / `ImGuiDockNode` from `imgui_internal.h`, which only
+> exist on ImGui's `docking` branch — not `master`. The recorded submodule
+> commit lives on `docking`; do **not** update `thirdparty/imgui` to a
+> `master` commit (the build will fail with ~11 `DockBuilder`/`ImGuiDockNode`
+> errors). If a build breaks on those symbols, the submodule working tree has
+> drifted off the recorded commit — restore it with:
+>
+> ```bash
+> git submodule update --init thirdparty/imgui
+> ```
+
 ## `.diffcue/` sidecar files
 
 diffcue creates a `.diffcue/` folder inside the reviewed working tree to
