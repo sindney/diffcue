@@ -82,6 +82,10 @@ struct DiffViewerPanel::Impl {
 
 DiffViewerPanel::DiffViewerPanel() : impl_(std::make_unique<Impl>()) {
     impl_->diff.SetSideBySideMode(true);
+    // The TextEditor's built-in scrollbar minimap (renderSideBySideMiniMap)
+    // draws diff-colored bands inside the scrollbar rect — always aligned
+    // with the content, no overlay math needed. We use it instead of a
+    // custom heatmap overlay.
 }
 
 DiffViewerPanel::~DiffViewerPanel() = default;
@@ -241,16 +245,10 @@ DiffViewerActions DiffViewerPanel::render(const model::CueStore& cues) {
     } else if (!impl_->current_path.empty()) {
         ImGui::Separator();
 
-        // Capture content geometry for mouse→line mapping and overlays.
-        float content_top = ImGui::GetCursorScreenPos().y;
+        // The sidebar lives OUTSIDE the TextDiff's BeginChild (in a left
+        // gutter of this `diff_viewer` child), so it uses the outer child
+        // geometry. We capture content_left / full_w here, before Render.
         float content_left = ImGui::GetCursorScreenPos().x;
-        // Use the TextDiff's actual line pitch (GetTextLineHeightWithSpacing *
-        // lineSpacing; lineSpacing defaults to 1.0 in TextEditor.h). The
-        // shorter GetTextLineHeight() would misalign hover/cue-dot/click
-        // against the rendered lines (TextDiff pushes ItemSpacing to 0 but
-        // computed glyphSize before the push, so it bakes in the outer
-        // ItemSpacing.y — this matches GetTextLineHeightWithSpacing() here).
-        float line_h = ImGui::GetTextLineHeightWithSpacing();
         float full_w = ImGui::GetContentRegionAvail().x;
 
         // Render the TextDiff at full width (don't steal space for the
@@ -258,18 +256,22 @@ DiffViewerActions DiffViewerPanel::render(const model::CueStore& cues) {
         // built-in minimap / diff-heat bar).
         impl_->diff.Render("##textdiff", ImVec2(0, 0), false);
 
+        // Geometry: origin.y/line_h come from the editor's last render
+        // (post-WindowPadding, scroll-corrected). Drawing at origin.y is
+        // pixel-aligned with the text the TextDiff just rendered — no
+        // fractional-scroll drift, no padding correction needed.
+        const ImVec2 origin = impl_->diff.GetLastRenderOrigin();
+        const float  line_h = impl_->diff.GetLineHeight();
         float diff_h = ImGui::GetItemRectSize().y;
         if (diff_h <= 0) diff_h = ImGui::GetContentRegionAvail().y;
-        int first_vis = impl_->diff.GetFirstVisibleLine();
-        int vis_lines = static_cast<int>(diff_h / line_h);
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
         // --- Hover line highlight (drawn as a semi-transparent overlay) ---
         if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)) {
             float my = ImGui::GetMousePos().y;
-            int hov = first_vis + static_cast<int>((my - content_top) / line_h);
+            int hov = static_cast<int>((my - origin.y) / line_h);
             if (hov >= 0) {
-                float hy = content_top + (hov - first_vis) * line_h;
+                float hy = origin.y + hov * line_h;
                 dl->AddRectFilled(
                     ImVec2(content_left, hy),
                     ImVec2(content_left + full_w, hy + line_h),
@@ -280,15 +282,13 @@ DiffViewerActions DiffViewerPanel::render(const model::CueStore& cues) {
         // --- Cue indicator sidebar (overlay on the LEFT edge) ---
         {
             float sidebar_w = 6.0f;
-            ImVec2 sidebar_pos(content_left, content_top);
+            ImVec2 sidebar_pos(content_left, origin.y);
             dl->AddRectFilled(sidebar_pos,
                               ImVec2(sidebar_pos.x + sidebar_w, sidebar_pos.y + diff_h),
                               IM_COL32(30, 30, 35, 160));
             for (const auto& c : cues.cues()) {
                 if (c.file != impl_->current_path) continue;
-                int line0 = c.line - 1;
-                if (line0 < first_vis || line0 > first_vis + vis_lines) continue;
-                float dot_y = content_top + (line0 - first_vis) * line_h + line_h * 0.5f;
+                float dot_y = origin.y + (c.line - 1) * line_h + line_h * 0.5f;
                 ImU32 dot_col = c.stale ? IM_COL32(120, 120, 120, 255)
                                         : IM_COL32(255, 210, 0, 255);
                 dl->AddCircleFilled(ImVec2(sidebar_pos.x + sidebar_w * 0.5f, dot_y),
@@ -296,41 +296,14 @@ DiffViewerActions DiffViewerPanel::render(const model::CueStore& cues) {
             }
         }
 
-        // --- Heatmap (overlay on the RIGHT edge of the content area) ---
-        // A thin static column of changed-section bands. Intentionally has
-        // NO viewport/thumb indicator — the viewport is already shown by the
-        // TextDiff's real vertical scrollbar (whose thumb is the only slider
-        // here). Drawing a thumb-like element on the heatmap previously
-        // produced a second "slider" alongside the real one.
-        {
-            float hm_w = 8.0f;
-            float hm_x = content_left + full_w - hm_w;
-            ImVec2 hm_pos(hm_x, content_top);
-            // Background.
-            dl->AddRectFilled(hm_pos,
-                              ImVec2(hm_x + hm_w, content_top + diff_h),
-                              IM_COL32(25, 25, 30, 200));
-            // Changed sections as colored bands.
-            if (impl_->total_lines > 0) {
-                float scale = diff_h / static_cast<float>(impl_->total_lines);
-                for (const auto& s : impl_->changed_sections) {
-                    float y0 = content_top + (s.first - 1) * scale;
-                    float y1 = content_top + s.second * scale;
-                    if (y1 - y0 < 2.0f) y1 = y0 + 2.0f;  // min 2px
-                    dl->AddRectFilled(ImVec2(hm_x + 1, y0),
-                                      ImVec2(hm_x + hm_w - 1, y1),
-                                      IM_COL32(0, 180, 40, 200));  // green = added
-                }
-            }
-        }
-
         // --- Right-click context menu to add a cue ---
         if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) &&
             ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
             float mouse_y = ImGui::GetMousePos().y;
-            // first_vis is 0-based (the index of the first visible line in
-            // lineInfo); cue lines are 1-based. Add 1 to convert.
-            int clicked_line = first_vis + 1 + static_cast<int>((mouse_y - content_top) / line_h);
+            // Same conversion the editor uses internally in GetWordAtScreenPos
+            // (TextEditor.cpp:1309-1314): origin is scroll-adjusted, so we
+            // don't need firstVisibleLine. +1 to convert 0-based to 1-based.
+            int clicked_line = 1 + static_cast<int>((mouse_y - origin.y) / line_h);
             if (clicked_line < 1) clicked_line = 1;
             impl_->cue_input_line = clicked_line;
 
