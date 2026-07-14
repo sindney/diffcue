@@ -39,11 +39,13 @@ FileStatus parse_status_code(char x, char y) {
 
 }  // namespace
 
-std::vector<GitEntry> list_changes(const std::filesystem::path& root) {
+std::vector<GitEntry> list_changes(const std::filesystem::path& root,
+                                   const std::atomic<bool>* cancel) {
     std::vector<GitEntry> entries;
     const std::string root_str = root.generic_string();
     const std::string out = platform::subprocess::run_capture(
-        "git", {"-C", root_str, "status", "--porcelain=v1", "-z", "-uall"});
+        "git", {"-C", root_str, "status", "--porcelain=v1", "-z", "-uall"},
+        cancel);
 
     // Parse NUL-delimited records. Each record is "XY <path>" or
     // "XY <path>\0<orig_path>" for renames/copies.

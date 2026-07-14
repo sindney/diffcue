@@ -133,6 +133,7 @@ App::App(std::filesystem::path folder)
     // the thread fails to spawn (rare: OS out of resources), fall back to
     // synchronous refresh — correctness is preserved, only the async UX
     // is lost.
+    cancel_token_ = std::make_shared<std::atomic<bool>>(false);
     try {
         worker_ = std::thread([this] { worker_loop(); });
     } catch (const std::system_error& e) {
@@ -147,10 +148,15 @@ App::App(std::filesystem::path folder)
 }
 
 App::~App() {
-    // Signal the worker to shut down and join it so an in-flight git status
-    // subprocess never outlives App's members.
+    // Signal the worker to shut down. Set the cancel token FIRST so any
+    // in-flight git subprocess is killed immediately (the worker's
+    // compute_refresh() will return early), THEN set shutdown_ and join.
+    // Without the cancel, the destructor would block waiting for a slow
+    // `git status` to finish — pointless when the user is closing the app.
+    if (cancel_token_) cancel_token_->store(true, std::memory_order_relaxed);
     shutdown_.store(true, std::memory_order_release);
     worker_cv_.notify_all();
+    result_cv_.notify_one();  // unblock worker if waiting on result consumption
     if (worker_.joinable()) {
         worker_.join();
     }
@@ -164,7 +170,18 @@ App::~App() {
 App::RefreshResult App::compute_refresh() {
     RefreshResult r;
     r.folder = folder_;
-    r.entries = git::list_changes(folder_);
+    // Capture the current cancel token. If open_folder() creates a new token
+    // (for a folder switch), the old token flips to true and list_changes
+    // kills the git subprocess. The new refresh (next loop iteration) will
+    // capture the new token and proceed normally.
+    auto cancel = cancel_token_;
+    const std::atomic<bool>* cancel_ptr = cancel ? cancel.get() : nullptr;
+    r.entries = git::list_changes(folder_, cancel_ptr);
+    // If cancelled, return early with whatever we have (likely empty).
+    // The stale-folder guard in apply_refresh_result() will discard it.
+    if (cancel_ptr && cancel_ptr->load(std::memory_order_relaxed)) {
+        return r;
+    }
     r.file_tree = model::build_file_tree(r.entries);
 
     // Build hunk list locally from the new file tree (matches the order
@@ -313,6 +330,14 @@ void App::refresh_git_status() {
 }
 
 void App::open_folder(const std::filesystem::path& canonical) {
+    // Cancel any in-flight git refresh for the previous folder. The worker's
+    // compute_refresh() captured the OLD cancel_token_; setting it to true
+    // makes list_changes kill its git subprocess and return early. We then
+    // create a NEW token so the upcoming refresh for this folder runs
+    // uninterrupted.
+    if (cancel_token_) cancel_token_->store(true, std::memory_order_relaxed);
+    cancel_token_ = std::make_shared<std::atomic<bool>>(false);
+
     folder_ = canonical;
     window_.set_title("diffcue - " + folder_.generic_string());
     prefs_ = model::load_prefs();
@@ -363,9 +388,9 @@ model::FileDiff App::build_file_diff(const std::filesystem::path& relpath) {
     fd.new_meta = model::detect_meta(fd.new_text);
     fd.binary = (fd.old_meta.encoding == model::Encoding::Binary ||
                  fd.new_meta.encoding == model::Encoding::Binary);
-    int changed = 0;
-    for (char c : fd.new_text) if (c == '\n') ++changed;
-    if (changed > model::kMaxChangedLines) fd.truncated = true;
+    // Truncation check removed: it was counting total lines in the new file
+    // (not changed lines), so any file >5000 lines was incorrectly marked as
+    // truncated. The diff viewer can handle large files on its own.
     return fd;
 }
 
@@ -725,6 +750,10 @@ int App::run() {
                 }
             }
         }
+        if (mactions.clear_recent) {
+            prefs_.recent_folders.clear();
+            model::save_prefs(prefs_);
+        }
         if (mactions.about_clicked) about_open_ = true;
 
         // --- About modal ---
@@ -782,7 +811,7 @@ int App::run() {
         // --- Toolbar (task 9.2: top, 32px) ---
         {
             ImGui::BeginChild("toolbar", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
-            auto tactions = ui::render_toolbar(*cues_, prefs_, find_bar_.open,
+            auto tactions = ui::render_toolbar(*cues_, prefs_,
                                                diff_viewer_.ignore_eol(),
                                                is_refreshing());
             // Merge palette toolbar-type commands onto the SAME tactions flags
@@ -801,6 +830,8 @@ int App::run() {
                         tactions.copy_prompt = true; break;
                     case ui::PaletteCommand::JumpToCue:
                         tactions.jump_to_cue_index = paction.payload; break;
+                    case ui::PaletteCommand::ListCues:
+                        tactions.open_cue_list = true; break;
                     case ui::PaletteCommand::ToggleDiffMode:
                         // Flip prefs.diff_mode here; the handler below applies it.
                         prefs_.diff_mode = (prefs_.diff_mode == model::DiffMode::SideBySide)
@@ -808,8 +839,6 @@ int App::run() {
                         tactions.diff_mode_toggled = true; break;
                     case ui::PaletteCommand::ToggleIgnoreEOL:
                         tactions.ignore_eol_toggled = true; break;
-                    case ui::PaletteCommand::ToggleFindBar:
-                        tactions.find_toggled = true; break;
                     default: break;  // menubar-type commands handled above
                 }
             }
@@ -830,9 +859,12 @@ int App::run() {
             if (ImGui::BeginPopupModal("Clear Cues?", nullptr, ImGuiWindowFlags_NoCollapse)) {
                 ImGui::Text("Remove all %d cues?", cues_->count());
                 ImGui::Separator();
-                // Focus the confirm button when the modal first opens so the
-                // default Enter behavior aligns with our explicit handler.
-                ImGui::SetKeyboardFocusHere();
+                // Focus the confirm button ONLY when the modal first opens.
+                // Calling SetKeyboardFocusHere every frame steals focus from
+                // the Cancel button, making it unclickable.
+                if (ImGui::IsWindowAppearing()) {
+                    ImGui::SetKeyboardFocusHere();
+                }
                 if (ImGui::Button("Clear (Enter)")) {
                     cues_->clear();
                     ImGui::CloseCurrentPopup();
@@ -853,7 +885,6 @@ int App::run() {
                 }
                 ImGui::EndPopup();
             }
-            if (tactions.find_toggled) find_bar_.open = !find_bar_.open;
             if (tactions.diff_mode_toggled) {
                 diff_viewer_.set_diff_mode(prefs_.diff_mode);
                 if (current_diff_) diff_viewer_.set_diff(*current_diff_, prefs_.diff_mode);
@@ -865,19 +896,17 @@ int App::run() {
             if (tactions.jump_to_cue_index >= 0) {
                 const auto& c = cues_->cues()[tactions.jump_to_cue_index];
                 open_file(c.file);
-                // Center the cue's line in the viewer. open_file → set_diff
-                // runs SetText first; scroll_to_line marks a request that the
-                // later Render in this frame honors (TextEditor ordering
-                // contract). `c.line` is 1-based end-to-end.
                 diff_viewer_.scroll_to_line(c.line);
+            }
+            if (tactions.open_cue_list) {
+                cue_list_open_ = true;
+                cue_list_selected_ = 0;
             }
             ImGui::EndChild();
         }
 
-        // --- Ctrl+F (task 8.6) ---
-        if (ImGui::IsKeyPressed(ImGuiKey_F, false) && ImGui::GetIO().KeyCtrl) {
-            find_bar_.open = !find_bar_.open;
-        }
+        // --- Ctrl+F is handled by the TextEditor's built-in find (works in
+        // both inline and SBS mode). No App-level find bar needed. ---
 
         // --- Ctrl+< / Ctrl+> for Prev/Next change ---
         // On most layouts `<` is Shift+, and `>` is Shift+., so the user
@@ -891,13 +920,6 @@ int App::run() {
                     scroll_to_next_change(1);
                 }
             }
-        }
-
-        // --- Find bar ---
-        if (find_bar_.open) {
-            ImGui::BeginChild("findbar", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
-            ui::render_find_bar(find_bar_);
-            ImGui::EndChild();
         }
 
         // --- Dockspace: hosts the dockable Files / Diff / Prompt windows.
@@ -986,6 +1008,67 @@ int App::run() {
             last_applied_mode_ = prefs_.diff_mode;
             if (current_diff_) diff_viewer_.set_diff(*current_diff_, prefs_.diff_mode);
             model::save_prefs(prefs_);
+        }
+
+        // --- Cue list dialog (centered, keyboard-navigable) ---
+        // Opened from the toolbar Cues button or the palette "List Cues".
+        // Up/Down to move selection, Enter/Space to jump, Esc to close.
+        if (cue_list_open_) {
+            ImGuiViewport* vp2 = ImGui::GetMainViewport();
+            ImGui::SetNextWindowPos(
+                ImVec2(vp2->WorkPos.x + vp2->WorkSize.x * 0.5f,
+                       vp2->WorkPos.y + vp2->WorkSize.y * 0.5f),
+                ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+            ImGui::SetNextWindowSize(ImVec2(600, 400), ImGuiCond_Appearing);
+            ImGui::Begin("Cue List", &cue_list_open_,
+                         ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse);
+
+            if (cues_->count() == 0) {
+                ImGui::TextDisabled("No cues. Right-click a diff line to add one.");
+            } else {
+                ImGui::TextDisabled("%d cue(s) — Up/Down to navigate, Enter to jump, Esc to close",
+                                    cues_->count());
+                ImGui::Separator();
+
+                if (cue_list_selected_ < 0) cue_list_selected_ = 0;
+                if (cue_list_selected_ >= cues_->count())
+                    cue_list_selected_ = cues_->count() - 1;
+
+                if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, false) && cue_list_selected_ > 0)
+                    --cue_list_selected_;
+                if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, false) &&
+                    cue_list_selected_ < cues_->count() - 1)
+                    ++cue_list_selected_;
+                const bool do_jump = ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
+                                     ImGui::IsKeyPressed(ImGuiKey_Space, false);
+
+                for (int i = 0; i < cues_->count(); ++i) {
+                    const auto& c = cues_->cues()[i];
+                    char entry[512];
+                    std::snprintf(entry, sizeof(entry), "%s:%d - %s",
+                                  c.file.generic_string().c_str(), c.line, c.text.c_str());
+                    ImGui::PushID(i);
+                    bool is_selected = (i == cue_list_selected_);
+                    if (ImGui::Selectable(entry, is_selected)) {
+                        cue_list_selected_ = i;
+                        open_file(c.file);
+                        diff_viewer_.scroll_to_line(c.line);
+                        cue_list_open_ = false;
+                    }
+                    if (is_selected && do_jump) {
+                        open_file(c.file);
+                        diff_viewer_.scroll_to_line(c.line);
+                        cue_list_open_ = false;
+                    }
+                    if (is_selected && ImGui::IsWindowAppearing())
+                        ImGui::SetKeyboardFocusHere(-1);
+                    ImGui::PopID();
+                }
+            }
+
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+                cue_list_open_ = false;
+            ImGui::End();
         }
 
         ImGui::End();  // ##main

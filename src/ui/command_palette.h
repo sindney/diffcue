@@ -20,9 +20,9 @@ enum class PaletteCommand {
     ClearCues,
     CopyPrompt,
     JumpToCue,       // payload = index into cues.cues()
+    ListCues,        // open the cue list dialog
     ToggleDiffMode,
     ToggleIgnoreEOL,
-    ToggleFindBar,
     ShowAll,
     About,
     Quit,

@@ -15,9 +15,14 @@ bool render_find_bar(FindBarState& state) {
     ImGui::Text("Find:");
     ImGui::SameLine();
     ImGui::PushItemWidth(300);
-    ImGui::InputText("##needle", state.needle, sizeof(state.needle),
+    bool enter_pressed = ImGui::InputText("##needle", state.needle, sizeof(state.needle),
                      ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::PopItemWidth();
+
+    // Enter in the text box = Next (user-friendly: type, Enter, Enter, Enter...)
+    if (enter_pressed) {
+        state.next_pressed = true;
+    }
 
     ImGui::SameLine();
     if (ImGui::Button("Next (F3)") || ImGui::IsKeyPressed(ImGuiKey_F3, false)) {

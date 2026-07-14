@@ -19,7 +19,6 @@
 #include "platform/window.h"
 #include "ui/command_palette.h"
 #include "ui/diff_viewer_panel.h"
-#include "ui/find_bar.h"
 #include "ui/prompt_panel.h"
 
 namespace diffcue {
@@ -122,7 +121,6 @@ private:
 
     ui::DiffViewerPanel diff_viewer_;
     ui::PromptPanel prompt_panel_;
-    ui::FindBarState find_bar_;
 
     bool prompt_open_ = false;
     float prompt_toast_ms_ = 0.0f;
@@ -135,6 +133,12 @@ private:
     // Set when the user picks a recent-folder entry whose path no longer
     // exists; rendered as a modal error popup next frame.
     std::string folder_error_;
+
+    // Cue list dialog state. Opened from the toolbar Cues button or the
+    // command palette. Keyboard-navigable: Up/Down to move selection,
+    // Enter/Space to jump, Esc to close.
+    bool cue_list_open_ = false;
+    int cue_list_selected_ = 0;
 
     // Hunk navigation state (task 8.8).
     std::vector<HunkRef> all_hunks_;
@@ -163,6 +167,12 @@ private:
     // Set to true if the worker thread failed to start; refresh falls back
     // to synchronous execution on the UI thread.
     bool worker_failed_ = false;
+    // Per-refresh cancellation token. Each open_folder() creates a NEW token
+    // (so the old in-flight refresh sees its captured token flip to true and
+    // aborts its git subprocess), and compute_refresh() captures the current
+    // token at the start of each run. On shutdown, the destructor sets the
+    // current token to true so the in-flight subprocess is killed before join.
+    std::shared_ptr<std::atomic<bool>> cancel_token_;
     // Counts completed compute_refresh() runs. Used by tests to observe
     // coalescing/in-flight invariants without exposing internal state.
     std::atomic<int> refresh_count_{0};

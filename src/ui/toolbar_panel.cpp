@@ -7,23 +7,8 @@
 
 namespace diffcue::ui {
 
-namespace {
-
-// Hover-dwell accumulator for the Cues button. When the mouse dwells on the
-// button for ~300ms, the cue_dropdown popup opens (no click required). Resets
-// to 0 whenever the button is unhovered. Single-instance toolbar → file-scope
-// static is fine (per design D8).
-float cue_hover_timer = 0.0f;
-
-// One-frame grace period before the cue_dropdown closes on mouse-leave. Lets
-// the mouse transit from the button into the popup without snapping it shut.
-int cue_popup_grace = 1;
-
-}  // namespace
-
 ToolbarActions render_toolbar(const model::CueStore& cues,
                               model::Prefs& prefs,
-                              bool find_bar_open,
                               bool ignore_eol,
                               bool is_refreshing) {
     ToolbarActions actions;
@@ -86,76 +71,18 @@ ToolbarActions render_toolbar(const model::CueStore& cues,
     ImGui::TextDisabled("|");
     ImGui::SameLine();
 
-    // Find toggle.
-    if (find_bar_open) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.5f, 0.3f, 1.0f));
-    if (ImGui::Button("Find")) actions.find_toggled = true;
-    if (find_bar_open) ImGui::PopStyleColor();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle find bar (Ctrl+F).");
-
-    ImGui::SameLine();
-    ImGui::TextDisabled("|");
-    ImGui::SameLine();
-
     // Cue operations: count | clear | copy prompt.
-    // The Cues button is always rendered (even at 0). Hovering it for ~300ms
-    // opens the cue_dropdown popup; clicking opens it instantly. The popup
-    // closes when the mouse leaves both the button and the popup body.
-    //
-    // The button hover check uses AllowWhenBlockedByPopup so that when the
-    // popup is open the button STILL reports as hovered — without this, the
-    // popup blocks the button's hover, the close-when-unhovered logic fires,
-    // and the popup flashes open/closed every frame.
+    // The Cues button opens a centered cue-list dialog (handled in App::run).
+    // No hover popup — the dialog is keyboard-navigable (Up/Down/Enter/Esc)
+    // and stays open until the user picks a cue or presses Esc.
     char cue_label[64];
     std::snprintf(cue_label, sizeof(cue_label), "Cues: %d##cues", cues.count());
     if (ImGui::Button(cue_label)) {
-        ImGui::OpenPopup("cue_dropdown");
-        cue_hover_timer = 0.0f;
+        actions.open_cue_list = true;
     }
-    const bool cue_button_hovered =
-        ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup);
-    if (cue_button_hovered) {
-        cue_hover_timer += ImGui::GetIO().DeltaTime;
-    } else {
-        cue_hover_timer = 0.0f;
-    }
-    // Hover-dwell opens the popup after ~300ms (OpenPopup is a no-op if the
-    // popup is already open, so calling it while the dwell holds is safe).
-    if (cue_button_hovered && cue_hover_timer >= 0.3f) {
-        ImGui::OpenPopup("cue_dropdown");
-    }
-    if (ImGui::BeginPopup("cue_dropdown")) {
-        // Empty state: a single disabled row for consistent feedback.
-        if (cues.count() == 0) {
-            ImGui::Selectable("No cues", false, ImGuiSelectableFlags_Disabled);
-        } else {
-            for (int i = 0; i < cues.count(); ++i) {
-                const auto& c = cues.cues()[i];
-                char entry[256];
-                std::snprintf(entry, sizeof(entry), "%s:%d - %s",
-                              c.file.generic_string().c_str(), c.line, c.text.c_str());
-                if (ImGui::Selectable(entry)) {
-                    actions.jump_to_cue_index = i;
-                    ImGui::CloseCurrentPopup();
-                }
-            }
-        }
-        // Close-when-unhovered: if neither the button nor the popup body is
-        // hovered this frame, close (after a one-frame grace period so the
-        // mouse can transit from the button into the popup).
-        const bool popup_hovered = ImGui::IsWindowHovered();
-        if (!cue_button_hovered && !popup_hovered) {
-            if (cue_popup_grace > 0) {
-                --cue_popup_grace;
-            } else {
-                ImGui::CloseCurrentPopup();
-            }
-        } else {
-            cue_popup_grace = 1;
-        }
-        ImGui::EndPopup();
-    } else {
-        // Popup closed — reset grace so the next open starts fresh.
-        cue_popup_grace = 1;
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Open the cue list dialog.\n"
+                          "Arrow keys to navigate, Enter to jump, Esc to close.");
     }
     ImGui::SameLine();
     if (ImGui::Button("Clear")) actions.clear_cues = true;

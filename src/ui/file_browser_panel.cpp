@@ -90,7 +90,7 @@ void render_node(const model::FileTreeNode& node, FileBrowserActions& actions,
     if (!show_all && !node.is_dir && node.status == diffcue::git::FileStatus::Clean) return;
 
     ImGui::PushID(node.relpath.generic_string().c_str());
-    ImGui::Indent(static_cast<float>(depth * 16));
+    ImGui::Indent(static_cast<float>(depth * 8));
 
     // Yellow dot for files/folders that have cues.
     bool has_cue = false;
@@ -158,7 +158,7 @@ void render_node(const model::FileTreeNode& node, FileBrowserActions& actions,
         }
     }
 
-    ImGui::Unindent(static_cast<float>(depth * 16));
+    ImGui::Unindent(static_cast<float>(depth * 8));
     ImGui::PopID();
 }
 

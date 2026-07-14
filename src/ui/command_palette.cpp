@@ -54,9 +54,10 @@ void build_command_list(std::vector<Entry>& out,
     out.push_back({"Refresh",             PaletteCommand::Refresh,            -1});
     out.push_back({"Clear Cues",          PaletteCommand::ClearCues,          -1});
     out.push_back({"Copy Prompt",         PaletteCommand::CopyPrompt,         -1});
+    out.push_back({"List Cues",           PaletteCommand::ListCues,           -1});
     out.push_back({"Toggle Diff Mode",    PaletteCommand::ToggleDiffMode,     -1});
     out.push_back({"Toggle Ignore EOL",   PaletteCommand::ToggleIgnoreEOL,    -1});
-    out.push_back({"Toggle Find Bar",     PaletteCommand::ToggleFindBar,      -1});
+
     out.push_back({"Show All",            PaletteCommand::ShowAll,            -1});
     out.push_back({"About diffcue",       PaletteCommand::About,              -1});
     out.push_back({"Quit",                PaletteCommand::Quit,               -1});

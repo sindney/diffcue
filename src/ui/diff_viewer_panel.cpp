@@ -78,6 +78,14 @@ struct DiffViewerPanel::Impl {
     int cue_input_line = 0;
     model::Side cue_input_side = model::Side::New;
     int cue_editing_index = -1;
+    // Deferred scroll: when scroll_to_line() is called, we record the line
+    // here and re-fire ScrollToLine on the NEXT render() frame. This fixes
+    // cue-click jumps where the file switches (SetText rebuilds lineInfo)
+    // and the first frame's ScrollToLine uses stale visibleLines from the
+    // previous file, producing a wrong scroll position. The second frame
+    // has correct visibleLines for the new file. Next/prev also benefit but
+    // the double-scroll is imperceptible (same position, ~16ms apart).
+    int deferred_scroll_line = -1;
 };
 
 DiffViewerPanel::DiffViewerPanel() : impl_(std::make_unique<Impl>()) {
@@ -174,6 +182,8 @@ void DiffViewerPanel::set_diff_mode(model::DiffMode mode) {
 void DiffViewerPanel::scroll_to_line(int line) {
     // ScrollToLine marks a request that Render() executes next frame.
     impl_->diff.ScrollToLine(line - 1, TextEditor::Scroll::alignMiddle);
+    // Also record a deferred re-scroll for the NEXT frame.
+    impl_->deferred_scroll_line = line;
 }
 
 bool DiffViewerPanel::ignore_eol() const { return impl_->ignore_eol; }
@@ -254,6 +264,16 @@ DiffViewerActions DiffViewerPanel::render(const model::CueStore& cues) {
         // Render the TextDiff at full width (don't steal space for the
         // sidebar — it's drawn as an overlay so the TextDiff keeps its
         // built-in minimap / diff-heat bar).
+        //
+        // Deferred scroll: if scroll_to_line() was called last frame,
+        // re-fire ScrollToLine now so renderSideBySide consumes it with
+        // the CURRENT frame's visibleLines (correct for the new file).
+        // This is the "second pass" that fixes cue-click jumps.
+        if (impl_->deferred_scroll_line >= 0) {
+            impl_->diff.ScrollToLine(impl_->deferred_scroll_line - 1,
+                                     TextEditor::Scroll::alignMiddle);
+            impl_->deferred_scroll_line = -1;
+        }
         impl_->diff.Render("##textdiff", ImVec2(0, 0), false);
 
         // Geometry: origin.y/line_h come from the editor's last render
@@ -352,9 +372,10 @@ DiffViewerActions DiffViewerPanel::render(const model::CueStore& cues) {
             bool submitted = ImGui::InputTextMultiline("##cue_popup_text",
                                               impl_->cue_text_buf,
                                               sizeof(impl_->cue_text_buf),
-                                              ImVec2(380, 100),
+                                              ImVec2(500, 200),
                                               ImGuiInputTextFlags_EnterReturnsTrue |
-                                              ImGuiInputTextFlags_CtrlEnterForNewLine);
+                                              ImGuiInputTextFlags_CtrlEnterForNewLine |
+                                              ImGuiInputTextFlags_WordWrap);
             ImGui::TextDisabled("Ctrl+Enter for new line, Enter to submit");
 
             if (ImGui::Button("Add") || submitted) {

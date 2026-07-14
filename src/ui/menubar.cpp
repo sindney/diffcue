@@ -71,6 +71,10 @@ MenubarActions render_menubar(model::Prefs& prefs) {
                         actions.open_recent_index = i;
                     }
                 }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Clear Recent Folders")) {
+                    actions.clear_recent = true;
+                }
             }
             ImGui::EndMenu();
         }

@@ -18,6 +18,7 @@ struct MenubarActions {
     bool open_palette_clicked = false;  // Cmd+P command palette
     // Index into prefs.recent_folders; -1 = no selection this frame.
     int open_recent_index = -1;
+    bool clear_recent = false;  // Clear the recent folders list
 };
 
 // Render the menubar. `prefs` is read for current selections and updated

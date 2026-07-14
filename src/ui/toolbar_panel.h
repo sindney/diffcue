@@ -15,11 +15,11 @@ struct ToolbarActions {
     bool next_change = false;
     bool copy_prompt = false;
     bool clear_cues = false;
-    bool find_toggled = false;
     bool diff_mode_toggled = false;
     bool ignore_eol_toggled = false;
     bool refresh = false;
     int jump_to_cue_index = -1;
+    bool open_cue_list = false;  // Cues button clicked — open the cue list dialog
 };
 
 // Render the toolbar. `ignore_eol` is the current EOL-normalization state
@@ -27,7 +27,6 @@ struct ToolbarActions {
 // `is_refreshing` drives the Refresh button's refreshing visual state.
 ToolbarActions render_toolbar(const model::CueStore& cues,
                               model::Prefs& prefs,
-                              bool find_bar_open,
                               bool ignore_eol,
                               bool is_refreshing);
 

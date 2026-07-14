@@ -1,6 +1,7 @@
 // git/git_adapter.h — git CLI wrapper (tasks 5.2-5.4). No libgit2.
 #pragma once
 
+#include <atomic>
 #include <filesystem>
 #include <string>
 #include <unordered_map>
@@ -13,7 +14,11 @@ namespace diffcue::git {
 // List all changed files in `root` (tracked + untracked) by spawning
 // `git -C <root> status --porcelain=v1 -z`. Returns one GitEntry per
 // changed file. On error (git missing, not a repo), returns empty.
-std::vector<GitEntry> list_changes(const std::filesystem::path& root);
+//
+// If `cancel` is non-null and becomes true, the git subprocess is killed
+// and the function returns early (possibly with partial/empty results).
+std::vector<GitEntry> list_changes(const std::filesystem::path& root,
+                                   const std::atomic<bool>* cancel = nullptr);
 
 // Read the HEAD version of `relpath` via `git -C <root> show HEAD:<relpath>`.
 // Returns empty string if the file is untracked (no HEAD version) or on

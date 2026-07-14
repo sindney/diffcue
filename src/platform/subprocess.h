@@ -2,6 +2,7 @@
 // stdout. Task 3.5. Used by the git adapter; no libgit2.
 #pragma once
 
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -14,7 +15,13 @@ namespace diffcue::platform::subprocess {
 //
 // `cmd` is the executable name (looked up on PATH) or an absolute path.
 // `args` does NOT include argv[0].
-std::string run_capture(const std::string& cmd, const std::vector<std::string>& args);
+//
+// If `cancel` is non-null and `cancel->load()` becomes true while the
+// subprocess is running, the child process is killed and the function
+// returns an empty string. This is used to abort git status refreshes
+// on folder switch and program shutdown.
+std::string run_capture(const std::string& cmd, const std::vector<std::string>& args,
+                        const std::atomic<bool>* cancel = nullptr);
 
 // Convenience: run `cmd args...` and return true if exit code == 0.
 // Used by the startup git probe (task 5.5).
