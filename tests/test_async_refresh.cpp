@@ -224,3 +224,42 @@ TEST_CASE("async_refresh: atomic apply — entries, file_tree, hunks update toge
     diffcue::git::clear_blob_cache();
     remove_all_force(repo);
 }
+
+TEST_CASE("hunks: binary-extension files excluded from next/prev navigation",
+          "[async_refresh][hunks]") {
+    auto repo = make_temp_repo("diffcue_hunks_binary");
+    // keep.cpp is Modified (non-untracked) → should be a hunk.
+    // Add a tracked binary file (.dll) and modify it so git status reports
+    // it as Modified (not Untracked, not Clean).
+    write_file(repo / "native.dll",
+               std::string("MZ\0\0\0\0\0", 8) + std::string("binary payload"));
+    run_git(repo, {"add", "native.dll"});
+    run_git(repo, {"commit", "-q", "-m", "add binary"});
+    write_file(repo / "native.dll",
+               std::string("MZ\0\0\0\0\1", 8) + std::string("changed payload"));
+
+    diffcue::App app(repo);
+    REQUIRE(wait_for_refresh_count(app, 1));
+    pump(app);
+
+    // native.dll is Modified so it appears in entries, but its .dll extension
+    // is binary → it must NOT appear in the hunk list (Next/Prev navigation).
+    bool has_dll = false;
+    for (const auto& e : app.test_entries()) {
+        if (e.relpath.extension() == ".dll") has_dll = true;
+    }
+    REQUIRE(has_dll);
+
+    for (const auto& h : app.test_hunks()) {
+        REQUIRE_FALSE(h.path.extension() == ".dll");
+    }
+    // keep.cpp (text, modified) should still be present.
+    bool has_keep = false;
+    for (const auto& h : app.test_hunks()) {
+        if (h.path.filename() == "keep.cpp") has_keep = true;
+    }
+    REQUIRE(has_keep);
+
+    diffcue::git::clear_blob_cache();
+    remove_all_force(repo);
+}

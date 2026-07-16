@@ -72,3 +72,52 @@ TEST_CASE("encoding_label / eol_label", "[file_meta]") {
     REQUIRE(std::string(encoding_label(Encoding::Utf8Bom)) == "UTF-8-BOM");
     REQUIRE(std::string(eol_label(Eol::Crlf)) == "CRLF");
 }
+
+TEST_CASE("is_binary_extension: common binary extensions", "[file_meta]") {
+    REQUIRE(is_binary_extension(".dll"));
+    REQUIRE(is_binary_extension(".lib"));
+    REQUIRE(is_binary_extension(".a"));
+    REQUIRE(is_binary_extension(".so"));
+    REQUIRE(is_binary_extension(".dylib"));
+    REQUIRE(is_binary_extension(".o"));
+    REQUIRE(is_binary_extension(".obj"));
+    REQUIRE(is_binary_extension(".exe"));
+    REQUIRE(is_binary_extension(".pdb"));
+    REQUIRE(is_binary_extension(".map"));
+    REQUIRE(is_binary_extension(".png"));
+    REQUIRE(is_binary_extension(".jpg"));
+    REQUIRE(is_binary_extension(".zip"));
+    REQUIRE(is_binary_extension(".pdf"));
+    REQUIRE(is_binary_extension(".pyc"));
+    REQUIRE(is_binary_extension(".wasm"));
+}
+
+TEST_CASE("is_binary_extension: works without leading dot", "[file_meta]") {
+    REQUIRE(is_binary_extension("dll"));
+    REQUIRE(is_binary_extension("png"));
+    REQUIRE(is_binary_extension("so"));
+}
+
+TEST_CASE("is_binary_extension: case-insensitive", "[file_meta]") {
+    REQUIRE(is_binary_extension(".DLL"));
+    REQUIRE(is_binary_extension(".Lib"));
+    REQUIRE(is_binary_extension(".SO"));
+}
+
+TEST_CASE("is_binary_extension: text extensions are not binary", "[file_meta]") {
+    REQUIRE_FALSE(is_binary_extension(".cpp"));
+    REQUIRE_FALSE(is_binary_extension(".h"));
+    REQUIRE_FALSE(is_binary_extension(".txt"));
+    REQUIRE_FALSE(is_binary_extension(".md"));
+    REQUIRE_FALSE(is_binary_extension(".json"));
+    REQUIRE_FALSE(is_binary_extension(".py"));
+    REQUIRE_FALSE(is_binary_extension(".xml"));
+    REQUIRE_FALSE(is_binary_extension(".sh"));
+}
+
+TEST_CASE("is_binary_extension: empty / edge cases", "[file_meta]") {
+    REQUIRE_FALSE(is_binary_extension(""));
+    REQUIRE_FALSE(is_binary_extension("."));
+    REQUIRE_FALSE(is_binary_extension(".cppp"));
+    REQUIRE_FALSE(is_binary_extension(".abcdefghij"));
+}

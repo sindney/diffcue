@@ -372,6 +372,16 @@ model::FileDiff App::build_file_diff(const std::filesystem::path& relpath) {
     model::FileDiff fd;
     fd.path = relpath;
 
+    // Fast path: known binary extension → skip blob reading entirely.
+    // read_blob_old spawns a `git show HEAD:<path>` subprocess and both
+    // readers load the full file into memory — pointless for binaries.
+    if (model::is_binary_extension(relpath.extension().string())) {
+        fd.binary = true;
+        fd.old_meta.encoding = model::Encoding::Binary;
+        fd.new_meta.encoding = model::Encoding::Binary;
+        return fd;
+    }
+
     auto it = std::find_if(entries_.begin(), entries_.end(),
         [&](const git::GitEntry& e) { return e.relpath == relpath; });
     const bool is_new = (it != entries_.end() &&
@@ -422,6 +432,11 @@ void App::collect_hunks_recursive(const model::FileTreeNode& node,
             collect_hunks_recursive(*c, out);
         }
     } else if (node.status != git::FileStatus::Untracked) {
+        // Skip files with known binary extensions (.dll/.lib/.a/.so/.png/...)
+        // so Next/Prev only lands on text files. Extension-based only — no
+        // blob reading here (read_blob_old spawns a git subprocess per file).
+        if (model::is_binary_extension(node.relpath.extension().string()))
+            return;
         out.push_back({node.relpath, 0});
     }
 }

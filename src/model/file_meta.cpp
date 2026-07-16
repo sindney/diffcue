@@ -5,6 +5,8 @@
 // else "mixed".
 #include "model/file_meta.h"
 
+#include <cctype>
+
 namespace diffcue::model {
 
 namespace {
@@ -119,6 +121,45 @@ FileMeta detect_meta(std::string_view b) {
     }
 
     return m;
+}
+
+bool is_binary_extension(std::string_view ext) {
+    // Strip a leading dot if present (path::extension() includes it).
+    if (!ext.empty() && ext[0] == '.') ext.remove_prefix(1);
+
+    // Lowercase into a stack buffer for case-insensitive compare.
+    char buf[16];
+    if (ext.empty() || ext.size() >= sizeof(buf)) return false;
+    for (size_t i = 0; i < ext.size(); ++i)
+        buf[i] = static_cast<char>(std::tolower(
+            static_cast<unsigned char>(ext[i])));
+    std::string_view low(buf, ext.size());
+
+    // Curated list of unambiguously-binary extensions.
+    constexpr std::string_view kBinary[] = {
+        // Libraries / object code / executables
+        "dll", "lib", "a", "so", "dylib", "o", "obj", "exe", "out", "app",
+        "pdb", "idb", "ilk", "exp", "map",
+        // Images
+        "png", "jpg", "jpeg", "gif", "bmp", "ico", "tif", "tiff", "webp",
+        // Archives
+        "zip", "tar", "gz", "bz2", "xz", "7z", "rar", "jar", "war", "tgz",
+        // Office / PDF
+        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+        // Audio / video
+        "mp3", "wav", "ogg", "flac", "aac", "m4a",
+        "mp4", "avi", "mkv", "mov", "webm",
+        // Compiled bytecode
+        "class", "pyc", "pyo", "wasm",
+        // Fonts
+        "ttf", "otf", "woff", "woff2", "eot",
+        // Databases / keystores
+        "db", "sqlite", "sqlite3", "mdb", "p12", "pfx", "keystore",
+    };
+    for (auto b : kBinary) {
+        if (low == b) return true;
+    }
+    return false;
 }
 
 const char* encoding_label(Encoding e) {

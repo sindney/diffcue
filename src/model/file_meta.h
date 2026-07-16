@@ -37,6 +37,10 @@ struct FileMeta {
 // Classify a blob. `bytes` is the raw file content (may contain NULs).
 FileMeta detect_meta(std::string_view bytes);
 
+// Fast path-based heuristic: true if `ext` (e.g. ".dll" or "dll") is a known
+// binary file extension. Does not read file content. Case-insensitive.
+bool is_binary_extension(std::string_view ext);
+
 const char* encoding_label(Encoding e);
 const char* eol_label(Eol e);
 
