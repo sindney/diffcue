@@ -4,6 +4,7 @@
 #include <cstdio>
 
 #include "imgui.h"
+#include "imgui_internal.h"  // ScrollToRect (horizontal scroll-reveal)
 
 namespace diffcue::ui {
 
@@ -91,6 +92,9 @@ void render_node(const model::FileTreeNode& node, FileBrowserActions& actions,
 
     ImGui::PushID(node.relpath.generic_string().c_str());
     ImGui::Indent(static_cast<float>(depth * 8));
+    // Row's visual left edge in screen coords (before the cue dot) —
+    // anchors the horizontal scroll-reveal in the file branch below.
+    const float row_start_x = ImGui::GetCursorScreenPos().x;
 
     // Yellow dot for files/folders that have cues.
     bool has_cue = false;
@@ -122,9 +126,22 @@ void render_node(const model::FileTreeNode& node, FileBrowserActions& actions,
             actions.open_file = node.relpath;
         }
         // When the selection changed this frame (e.g. via Prev/Next change),
-        // scroll the file tree so the selected row is centered. Only fires
+        // scroll the file tree so the selected row is visible. Only fires
         // on the frame the file changes, so manual scrolling isn't fought.
         if (is_current && scroll_to_selected) {
+            // Horizontal reveal: the Selectable spans the full window width
+            // (SpanAllColumns), so its item rect always counts as fully
+            // visible and ImGui would never scroll X. Reveal the label's
+            // real extent instead — scrolls as little as possible, and
+            // left-aligns names wider than the panel so the name's start
+            // shows. ScrollToRect also writes the Y scroll target, so
+            // SetScrollHereY must come after it to keep vertical centering.
+            const ImRect label_rect(
+                ImVec2(row_start_x, ImGui::GetItemRectMin().y),
+                ImVec2(row_start_x + ImGui::CalcTextSize(label.c_str()).x,
+                       ImGui::GetItemRectMax().y));
+            ImGui::ScrollToRect(ImGui::GetCurrentWindow(), label_rect,
+                                ImGuiScrollFlags_KeepVisibleEdgeX);
             ImGui::SetScrollHereY(0.5f);
         }
         ImGui::PopStyleColor();
