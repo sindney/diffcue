@@ -611,7 +611,8 @@ int App::run() {
                                        ImGuiWindowFlags_NoCollapse)) {
                 ImGui::Text("git not found on PATH.\ndiffcue requires git installed.");
                 ImGui::Separator();
-                if (ImGui::Button("OK")) {
+                if (ImGui::Button("OK (Enter/Esc)") || ImGui::IsKeyPressed(ImGuiKey_Enter, false)
+                    || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
                     ImGui::CloseCurrentPopup();
                     window_.request_close();
                 }
@@ -662,7 +663,8 @@ int App::run() {
             ImGui::Text("'%s' is not a git repository.", folder_.generic_string().c_str());
             ImGui::Text("diffcue requires a git working tree to show changes.");
             ImGui::Separator();
-            if (ImGui::Button("OK")) {
+            if (ImGui::Button("OK (Enter/Esc)") || ImGui::IsKeyPressed(ImGuiKey_Enter, false)
+                || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
@@ -790,7 +792,8 @@ int App::run() {
                 platform::open_url("https://github.com/sindney/diffcue");
             }
             ImGui::Separator();
-            if (ImGui::Button("OK")) {
+            if (ImGui::Button("OK (Enter/Esc)") || ImGui::IsKeyPressed(ImGuiKey_Enter, false)
+                || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
@@ -804,7 +807,7 @@ int App::run() {
         if (ImGui::BeginPopupModal("Folder Error", nullptr, ImGuiWindowFlags_NoCollapse)) {
             ImGui::TextWrapped("%s", folder_error_.c_str());
             ImGui::Separator();
-            if (ImGui::Button("OK") || ImGui::IsKeyPressed(ImGuiKey_Enter, false)
+            if (ImGui::Button("OK (Enter/Esc)") || ImGui::IsKeyPressed(ImGuiKey_Enter, false)
                 || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
                 folder_error_.clear();
                 ImGui::CloseCurrentPopup();
