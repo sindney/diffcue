@@ -22,6 +22,7 @@ namespace {
 // the `void Setup*Style()` headers in theme.txt; the unit test in task 7.7
 // asserts the count matches the headers, so any drift is caught.
 const ThemeEntry kThemes[] = {
+    {"Programmer",       &SetupImGuiProgrammerStyle},
     {"Dark",             &SetupImGuiDarkStyle},
     {"ForestGreen",      &SetupForestGreenStyle},
     {"Amethyst",         &SetupImGuiAmethystStyle},
