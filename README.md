@@ -26,6 +26,8 @@ diffcue --version
 - `--help` / `-h` prints usage. `--version` / `-V` prints the version.
 - Drag-and-drop a folder onto the window to switch.
 - `Ctrl+O` opens a native folder picker. `Ctrl+Q` quits. `Ctrl+F` toggles find.
+- `Ctrl+P` opens the command palette. Hold Up or Down to move through results;
+  the list scrolls to keep the selected command visible.
 
 `git` must be on `PATH` at runtime. diffcue invokes `git status` and
 `git show` as subprocesses — no libgit2.

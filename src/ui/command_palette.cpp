@@ -30,6 +30,7 @@ struct Entry {
 char filter_buf[256] = "";
 int selected_index = 0;
 std::string last_filter;  // detect filter changes to reset selection
+bool scroll_to_selection = false;
 
 bool icontains(const std::string& haystack, const std::string& needle) {
     if (needle.empty()) return true;
@@ -115,6 +116,7 @@ bool render_command_palette(PaletteActions& out,
         filter_buf[0] = '\0';
         last_filter.clear();
         selected_index = 0;
+        scroll_to_selection = true;
         ImGui::SetKeyboardFocusHere();
     }
     ImGui::InputTextWithHint("##palette_filter", "Type to filter commands...",
@@ -137,6 +139,7 @@ bool render_command_palette(PaletteActions& out,
     if (filter_str != last_filter) {
         selected_index = 0;
         last_filter = filter_str;
+        scroll_to_selection = true;
     }
     if (!filtered.empty() && selected_index >= static_cast<int>(filtered.size())) {
         selected_index = static_cast<int>(filtered.size()) - 1;
@@ -145,12 +148,14 @@ bool render_command_palette(PaletteActions& out,
 
     // Keyboard navigation (Up/Down with wrap, Enter runs, Esc closes).
     if (!filtered.empty()) {
-        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, false)) {
+        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
             selected_index = (selected_index + 1) % static_cast<int>(filtered.size());
+            scroll_to_selection = true;
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, false)) {
+        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
             selected_index = (selected_index - 1 + static_cast<int>(filtered.size()))
                              % static_cast<int>(filtered.size());
+            scroll_to_selection = true;
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
             const auto* e = filtered[selected_index];
@@ -172,6 +177,7 @@ bool render_command_palette(PaletteActions& out,
     } else {
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(filtered.size()));
+        if (scroll_to_selection) clipper.IncludeItemByIndex(selected_index);
         while (clipper.Step()) {
             for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
                 bool is_selected = (i == selected_index);
@@ -182,7 +188,13 @@ bool render_command_palette(PaletteActions& out,
                     out.payload = filtered[i]->payload;
                     open_flag = false;
                 }
-                if (is_selected) ImGui::SetItemDefaultFocus();
+                if (is_selected) {
+                    ImGui::SetItemDefaultFocus();
+                    if (scroll_to_selection) {
+                        ImGui::SetScrollHereY(0.5f);
+                        scroll_to_selection = false;
+                    }
+                }
             }
         }
         clipper.End();
